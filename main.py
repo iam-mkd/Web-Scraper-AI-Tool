@@ -1,9 +1,8 @@
 import os
-import sys
 from typing import List, Optional
 from dotenv import load_dotenv
 
-# Load environment variables on startup
+# Load environment variables on startup (LangSmith tracing, etc.)
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, status, Request
@@ -12,17 +11,24 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, HttpUrl, Field
 import httpx
 
-from scraper import scrape_webpage
-from rag_service import RAGService
+from vector_store import get_vector_store_manager
+from ingestion import IngestionService
+from qa import QAService
 
 app = FastAPI(
     title="Web Scraper AI API",
-    description="API for scraping webpages, chunking, embedding into ChromaDB, and querying with Ollama and LangSmith tracing.",
-    version="1.0.0",
+    description=(
+        "Decoupled Web Scraper and RAG API: "
+        "Ingestion Pipeline (fetch -> clean -> chunk -> embed -> ChromaDB) & "
+        "QA Pipeline (embed question -> ChromaDB -> top-k chunks -> Granite LLM -> answer)"
+    ),
+    version="2.0.0",
 )
 
-# Initialize RAG Service
-rag_service = RAGService()
+# Initialize distinct services
+vector_store_manager = get_vector_store_manager()
+ingestion_service = IngestionService(vector_store_manager=vector_store_manager)
+qa_service = QAService(vector_store_manager=vector_store_manager)
 
 
 # ---------------------------------------------------------
@@ -65,7 +71,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 # Request & Response Schemas
 # ---------------------------------------------------------
 class ScrapeRequest(BaseModel):
-    url: HttpUrl = Field(..., description="The webpage URL to scrape and embed")
+    url: HttpUrl = Field(..., description="The webpage URL to fetch, clean, chunk, embed, and store")
     force_refresh: bool = Field(
         default=False,
         description="If True, re-scrapes and updates existing ChromaDB embeddings for this URL",
@@ -77,6 +83,8 @@ class ScrapeResponse(BaseModel):
     url: str
     title: str
     chunks_indexed: int
+    char_count: Optional[int] = None
+    sample_chunk: Optional[str] = None
     message: str
 
 
@@ -85,11 +93,11 @@ class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Question to ask about the webpage content")
     auto_scrape: bool = Field(
         default=True,
-        description="If True, automatically scrapes and embeds the webpage if not already indexed",
+        description="If True, automatically triggers the ingestion workflow if the URL is not yet indexed",
     )
     force_refresh: bool = Field(
         default=False,
-        description="If True, re-scrapes even if already indexed before answering query",
+        description="If True, re-ingests the URL even if already indexed before answering",
     )
 
 
@@ -117,11 +125,15 @@ class HealthResponse(BaseModel):
 async def root():
     return {
         "name": "Web Scraper AI Tool API",
-        "description": "Scrape, chunk, embed into ChromaDB, and query with Ollama + LangSmith",
+        "description": "Decoupled Ingestion Pipeline and Question Answering Pipeline",
+        "workflows": {
+            "ingestion": "fetch webpage -> clean html -> chunk -> embed -> ChromaDB (POST /api/scrape)",
+            "qa": "embed question -> ChromaDB -> top-k chunks -> Granite LLM -> answer (POST /api/query)",
+        },
         "endpoints": {
-            "POST /api/query": "Query a webpage with automatic scraping and RAG generation",
-            "POST /api/scrape": "Explicitly scrape and index a webpage into ChromaDB",
-            "GET /health": "Check system and service health status",
+            "POST /api/scrape": "Execute ingestion pipeline for a webpage",
+            "POST /api/query": "Execute question answering pipeline against indexed webpage",
+            "GET /health": "Check system and model health status",
             "GET /docs": "Interactive Swagger UI documentation",
         },
     }
@@ -152,22 +164,26 @@ async def health_check():
 
 
 @app.post("/api/scrape", response_model=ScrapeResponse, response_class=JSONResponse)
-async def scrape_and_index(request: ScrapeRequest):
+async def scrape_endpoint(request: ScrapeRequest):
+    """
+    Ingestion Pipeline:
+    fetch webpage -> clean html -> chunk -> embed -> chromadb
+    """
     url_str = str(request.url)
-
-    # Check if already indexed and force_refresh is False
-    if rag_service.is_url_indexed(url_str) and not request.force_refresh:
-        return ScrapeResponse(
-            status="already_indexed",
-            url=url_str,
-            title="Already Indexed",
-            chunks_indexed=rag_service.index_webpage(url_str, "", "", force_refresh=False),
-            message="Webpage is already indexed in ChromaDB. Set force_refresh=True to re-index.",
-        )
-
-    # Scrape webpage
     try:
-        scraped_data = await scrape_webpage(url_str)
+        result = await ingestion_service.ingest_url(
+            url=url_str,
+            force_refresh=request.force_refresh,
+        )
+        return ScrapeResponse(
+            status=result["status"],
+            url=result["url"],
+            title=result["title"],
+            chunks_indexed=result["chunks_indexed"],
+            char_count=result.get("char_count"),
+            sample_chunk=result.get("sample_chunk"),
+            message=result["message"],
+        )
     except PermissionError as e:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -181,51 +197,34 @@ async def scrape_and_index(request: ScrapeRequest):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error scraping webpage: {str(e)}",
+            detail=f"Ingestion failed: {str(e)}",
         )
-
-    # Chunk and index into ChromaDB
-    try:
-        num_chunks = rag_service.index_webpage(
-            url=url_str,
-            title=scraped_data["title"],
-            content=scraped_data["content"],
-            force_refresh=request.force_refresh,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error generating embeddings or storing in ChromaDB: {str(e)}",
-        )
-
-    return ScrapeResponse(
-        status="success",
-        url=url_str,
-        title=scraped_data["title"],
-        chunks_indexed=num_chunks,
-        message=f"Successfully scraped, chunked, and stored {num_chunks} chunks in ChromaDB.",
-    )
 
 
 @app.post("/api/query", response_model=QueryResponse, response_class=JSONResponse)
-async def query_webpage_endpoint(request: QueryRequest):
+async def query_endpoint(request: QueryRequest):
+    """
+    Question Answering Pipeline:
+    embed question -> chroma db -> top k chunks -> granite (LLM) -> answer
+
+    Convenience behavior:
+    If URL is not yet indexed, optionally runs ingestion first if auto_scrape=True.
+    """
     url_str = str(request.url)
 
-    # Handle auto-scraping if URL is not yet indexed or force_refresh is True
-    if not rag_service.is_url_indexed(url_str) or request.force_refresh:
+    # 1. Ingestion check / Auto-ingestion
+    is_indexed = vector_store_manager.is_url_indexed(url_str)
+    if not is_indexed or request.force_refresh:
         if not request.auto_scrape:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Webpage {url_str} is not yet indexed in ChromaDB, and auto_scrape is disabled.",
             )
 
-        # Scrape and index
+        # Run ingestion workflow first
         try:
-            scraped_data = await scrape_webpage(url_str)
-            rag_service.index_webpage(
+            await ingestion_service.ingest_url(
                 url=url_str,
-                title=scraped_data["title"],
-                content=scraped_data["content"],
                 force_refresh=request.force_refresh,
             )
         except PermissionError as e:
@@ -236,24 +235,27 @@ async def query_webpage_endpoint(request: QueryRequest):
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to scrape and index webpage before querying: {str(e)}",
+                detail=f"Auto-ingestion failed before querying: {str(e)}",
             )
 
-    # Execute RAG query (with LangSmith tracing)
+    # 2. Question Answering workflow
     try:
-        result = await rag_service.query_webpage(url=url_str, query=request.query)
+        qa_result = await qa_service.answer_query(
+            url=url_str,
+            query=request.query,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing query with LLM: {str(e)}",
+            detail=f"QA pipeline failed: {str(e)}",
         )
 
     return QueryResponse(
-        url=url_str,
-        query=request.query,
-        answer=result["answer"],
-        sources=result["sources"],
-        model=result["model"],
+        url=qa_result["url"],
+        query=qa_result["query"],
+        answer=qa_result["answer"],
+        sources=qa_result["sources"],
+        model=qa_result["model"],
     )
 
 

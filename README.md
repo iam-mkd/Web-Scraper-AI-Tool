@@ -63,19 +63,25 @@ All execution steps, prompt constructions, and LLM inferences are fully traced v
         POST /api/scrape     │                │     POST /api/query
                              ▼                ▼
      ┌────────────────────────────────┐   ┌────────────────────────────────┐
-     │      scraper.py (Fetcher)      │   │     rag_service.py (RAG)       │
-     │ ────────────────────────────── │   │ ────────────────────────────── │
-     │ • curl-cffi (Browser Imperson) │   │ • RecursiveTextSplitter        │
-     │ • BeautifulSoup4 HTML Parsing  │   │ • Ollama nomic-embed-text      │
-     │ • Whitespace & Noise Stripping │   │ • ChromaDB Persistent Store    │
-     └────────────────────────────────┘   │ • Ollama granite3-dense:2b     │
-                                          └──────────────┬─────────────────┘
-                                                         │
-                                                         ▼
-                                          ┌────────────────────────────────┐
-                                          │     LangSmith Traceability     │
-                                          │   (Prompts, Latency, Metrics)  │
-                                          └────────────────────────────────┘
+     │   Ingestion Pipeline           │   │   QA Pipeline (qa.py)          │
+     │   (ingestion.py + scraper.py)  │   │ ────────────────────────────── │
+     │ ────────────────────────────── │   │ 1. Embed query                 │
+     │ 1. Fetch & clean HTML          │   │ 2. Retrieve top-k chunks       │
+     │ 2. Chunk text with overlap     │   │ 3. Assemble context & prompt   │
+     │ 3. Embed with nomic-embed-text │   │ 4. Generate with Granite LLM   │
+     │ 4. Persist vectors in ChromaDB │   └──────────────┬─────────────────┘
+     └────────────────┬───────────────┘                  │
+                      │                                  ▼
+                      │                   ┌────────────────────────────────┐
+                      │                   │     LangSmith Traceability     │
+                      │                   │   (Prompts, Latency, Metrics)  │
+                      │                   └────────────────────────────────┘
+                      ▼
+     ┌───────────────────────────────────────────────────┐
+     │     Vector Store Layer (vector_store.py)          │
+     │     • ChromaDB persistent store (./chroma_db)     │
+     │     • Ollama nomic-embed-text (768-dim)           │
+     └───────────────────────────────────────────────────┘
 ```
 
 ---
@@ -328,9 +334,11 @@ web_scraper_ai/
 ├── pyproject.toml        # Project dependencies and metadata
 ├── README.md             # Project documentation
 ├── scraper.py            # Async web scraper with browser impersonation
-├── rag_service.py        # Text chunking, ChromaDB store, Ollama embeddings & RAG chain
+├── vector_store.py       # Centralized ChromaDB store & nomic-embed-text embeddings
+├── ingestion.py          # Dedicated Ingestion Pipeline (fetch -> clean -> chunk -> embed -> ChromaDB)
+├── qa.py                 # Dedicated QA Pipeline (embed query -> ChromaDB -> top-k -> Granite LLM -> answer)
 ├── main.py               # FastAPI application with strict JSON endpoints
-└── test_app.py           # End-to-end integration test suite
+└── test_app.py           # Integration test suite for decoupled pipelines
 ```
 
 ---
