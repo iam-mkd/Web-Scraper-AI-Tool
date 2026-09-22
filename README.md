@@ -244,13 +244,29 @@ The primary endpoint. It takes a webpage URL and a query. If the webpage has not
 - **Response (200 OK)**:
   ```json
   {
+    "answer": "Based on the provided context, the 32GB DDR5 RAM options include Patriot Memory Viper Venom DDR5 32GB (6000MHz) and Corsair Vengeance RGB RS DDR5 32GB (6000MHz)...",
+    "sources": [
+      {
+        "content": "Patriot Memory Viper Venom DDR5 32GB (2 x 16GB) 6000MHz UDIMM Desktop Gaming Memory KIT...",
+        "metadata": {
+          "url": "https://www.amazon.in/s?k=ddr+5+ram+32gb",
+          "chunk_id": 0,
+          "title": "Amazon.in : ddr 5 ram 32gb"
+        },
+        "score": 0.82
+      },
+      {
+        "content": "Corsair Vengeance RGB RS DDR5 32GB (2 x 16GB) Up to 6000MHz AMD Intel RAM...",
+        "metadata": {
+          "url": "https://www.amazon.in/s?k=ddr+5+ram+32gb",
+          "chunk_id": 1,
+          "title": "Amazon.in : ddr 5 ram 32gb"
+        },
+        "score": 0.79
+      }
+    ],
     "url": "https://www.amazon.in/s?k=ddr+5+ram+32gb",
     "query": "What 32GB DDR5 RAM options are available and what are their speeds?",
-    "answer": "Based on the provided context, here are the 32GB DDR5 RAM options available along with their speeds:\n\n1. Patriot Memory Viper Venom DDR5 32GB (2 x 16GB) 6000MHz UDIMM\n2. Corsair Vengeance RGB RS DDR5 32GB (2 x 16GB) Up to 6000MHz\n3. TeamGroup T-Force Delta RGB 2x16GB 6000MHz (6000MT/s) CL30\n4. Patriot Memory Viper Xtreme 5 RGB DDR5 8000MT/s\n\nThe speeds of these options range between 6000MHz and 8000MT/s.",
-    "sources": [
-      "1-16 of 105 results for \"ddr 5 ram 32gb\" ... Patriot Memory Viper Venom DDR5 32GB 6000MHz ...",
-      "Corsair Vengeance RGB RS DDR5 32GB (2 x 16GB) Up to 6000MHz AMD Intel RAM ..."
-    ],
     "model": "granite3-dense:2b"
   }
   ```

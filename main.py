@@ -91,6 +91,10 @@ class ScrapeResponse(BaseModel):
 class QueryRequest(BaseModel):
     url: HttpUrl = Field(..., description="The webpage URL to query against")
     query: str = Field(..., min_length=1, description="Question to ask about the webpage content")
+    top_k: Optional[int] = Field(
+        default=None,
+        description="Number of chunks to retrieve. If None, dynamically retrieves all chunks for pages with <= 12 chunks, or 8 chunks for larger pages.",
+    )
     auto_scrape: bool = Field(
         default=True,
         description="If True, automatically triggers the ingestion workflow if the URL is not yet indexed",
@@ -101,12 +105,25 @@ class QueryRequest(BaseModel):
     )
 
 
-class QueryResponse(BaseModel):
+class SourceMetadata(BaseModel):
     url: str
-    query: str
+    chunk_id: int
+    title: Optional[str] = None
+    total_chunks: Optional[int] = None
+
+
+class SourceItem(BaseModel):
+    content: str
+    metadata: SourceMetadata
+    score: float
+
+
+class QueryResponse(BaseModel):
     answer: str
-    sources: List[str]
-    model: str
+    sources: List[SourceItem]
+    url: Optional[str] = None
+    query: Optional[str] = None
+    model: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -243,6 +260,7 @@ async def query_endpoint(request: QueryRequest):
         qa_result = await qa_service.answer_query(
             url=url_str,
             query=request.query,
+            top_k=request.top_k,
         )
     except Exception as e:
         raise HTTPException(
@@ -251,10 +269,10 @@ async def query_endpoint(request: QueryRequest):
         )
 
     return QueryResponse(
-        url=qa_result["url"],
-        query=qa_result["query"],
         answer=qa_result["answer"],
         sources=qa_result["sources"],
+        url=qa_result["url"],
+        query=qa_result["query"],
         model=qa_result["model"],
     )
 

@@ -77,6 +77,14 @@ def test_api():
     query_data = query_resp.json()
     assert "answer" in query_data
     assert len(query_data["sources"]) > 0
+    first_source = query_data["sources"][0]
+    assert "content" in first_source
+    assert "metadata" in first_source
+    assert "url" in first_source["metadata"]
+    assert "chunk_id" in first_source["metadata"]
+    assert "score" in first_source
+    assert isinstance(first_source["score"], (float, int))
+    print(f"Sample source verification: chunk_id={first_source['metadata']['chunk_id']}, score={first_source['score']}")
     print("\nAll automated decoupled tests PASSED successfully!")
 
 

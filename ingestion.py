@@ -73,6 +73,7 @@ class IngestionService:
                 metadata={
                     "url": url_str,
                     "title": title,
+                    "chunk_id": i,
                     "chunk_index": i,
                     "total_chunks": len(chunks),
                 },

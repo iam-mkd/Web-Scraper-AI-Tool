@@ -80,9 +80,18 @@ async def scrape_webpage(url: str, timeout: float = 25.0) -> Dict[str, Any]:
     # Extract page title
     title = soup.title.string.strip() if (soup.title and soup.title.string) else "Untitled Webpage"
 
-    # Remove non-content tags
-    for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "svg", "form"]):
-        tag.decompose()
+    # Remove non-content tags and common noise containers (sidebars, footers, ad facets)
+    noise_selectors = [
+        "script", "style", "nav", "footer", "header", "aside", "noscript", "svg", "form",
+        "#navFooter", "#s-refinements", "#rhf", "#nav-subnav", "#nav-upnav",
+        ".s-desktop-toolbar", ".s-breadcrumb", ".nav-footer", ".nav-subnav",
+        ".sidebar", ".widget-area", ".breadcrumb", ".breadcrumbs", ".pagination",
+        ".cookie-banner", ".cookie-notice", ".social-share", ".advertisement", ".ad-container",
+        "[role='navigation']", "[role='banner']", "[role='contentinfo']",
+    ]
+    for sel in noise_selectors:
+        for tag in soup.select(sel):
+            tag.decompose()
 
     # Prioritize main content if available
     main_content = soup.find("article") or soup.find("main") or soup.body or soup
