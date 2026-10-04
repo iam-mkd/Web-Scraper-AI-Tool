@@ -1,7 +1,13 @@
+import os
 from typing import Dict, Any, List, Optional
+from dotenv import load_dotenv
+
+# Ensure environment variables are loaded
+load_dotenv()
+
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 
 from vector_store import get_vector_store_manager, VectorStoreManager
 
@@ -9,23 +15,19 @@ from vector_store import get_vector_store_manager, VectorStoreManager
 class QAService:
     """
     Question Answering Pipeline:
-    embed question -> chroma db -> top k chunks -> granite (LLM) -> answer
+    embed question -> chroma db -> top k chunks -> Groq LLM -> answer
     """
 
     def __init__(
         self,
         vector_store_manager: Optional[VectorStoreManager] = None,
-        llm_model: str = "granite3-dense:2b",
+        llm_model: Optional[str] = None,
         temperature: float = 0.1,
     ):
         self.vector_store_manager = vector_store_manager or get_vector_store_manager()
-        self.llm_model = llm_model
-
-        # Initialize Ollama LLM
-        self.llm = ChatOllama(
-            model=self.llm_model,
-            temperature=temperature,
-        )
+        self.llm_model = llm_model or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+        self.temperature = temperature
+        self._llm: Optional[ChatGroq] = None
 
         # RAG Prompt Template
         self.prompt = ChatPromptTemplate.from_messages([
@@ -48,7 +50,25 @@ class QAService:
             ("human", "{question}"),
         ])
 
-        self.chain = self.prompt | self.llm | StrOutputParser()
+    def get_llm(self) -> ChatGroq:
+        """Lazily initialize ChatGroq to ensure GROQ_API_KEY is present and hot-reloadable."""
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            raise ValueError(
+                "GROQ_API_KEY environment variable is not set. "
+                "Please add and save GROQ_API_KEY in your .env file."
+            )
+        if self._llm is None:
+            self._llm = ChatGroq(
+                model=self.llm_model,
+                temperature=self.temperature,
+                api_key=groq_api_key,
+            )
+        return self._llm
+
+    def get_chain(self):
+        """Returns the RAG chain composed of prompt, Groq LLM, and output parser."""
+        return self.prompt | self.get_llm() | StrOutputParser()
 
     async def answer_query(
         self,
@@ -61,7 +81,7 @@ class QAService:
         1. Dynamically determines effective top_k (covers all chunks if page <= 12 chunks)
         2. Embeds question and queries ChromaDB strictly filtered by URL with relevance scores
         3. Sorts context chunks in natural document order
-        4. Invokes Granite LLM (traced by LangSmith)
+        4. Invokes Groq LLM (traced by LangSmith)
         5. Returns answer and rich source objects with content, metadata (url, chunk_id), and score
         """
         url_str = str(url)
@@ -140,8 +160,9 @@ class QAService:
         context_text = "\n\n".join(context_parts)
         page_title = results_with_scores[0][0].metadata.get("title", "Webpage")
 
-        # Run inference (automatically traced by LangSmith)
-        answer = await self.chain.ainvoke({
+        # Run inference through Groq (automatically traced by LangSmith)
+        chain = self.get_chain()
+        answer = await chain.ainvoke({
             "title": page_title,
             "url": url_str,
             "context": context_text,

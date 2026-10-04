@@ -15,3 +15,7 @@ wheels/
 # ChromaDB persistence
 chroma_db/
 test_chroma_db/
+
+# IDE
+.vscode/
+

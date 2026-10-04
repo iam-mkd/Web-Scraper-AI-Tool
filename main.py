@@ -1,5 +1,6 @@
 import os
 from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from dotenv import load_dotenv
 
 # Load environment variables on startup (LangSmith tracing, etc.)
@@ -14,21 +15,27 @@ import httpx
 from vector_store import get_vector_store_manager
 from ingestion import IngestionService
 from qa import QAService
+from agent_service import get_agent_service
+from models import Product, ResearchRequest, ResearchResponse
 
 app = FastAPI(
     title="Web Scraper AI API",
     description=(
         "Decoupled Web Scraper and RAG API: "
         "Ingestion Pipeline (fetch -> clean -> chunk -> embed -> ChromaDB) & "
-        "QA Pipeline (embed question -> ChromaDB -> top-k chunks -> Granite LLM -> answer)"
+        "QA Pipeline (embed question -> ChromaDB -> top-k chunks -> Groq LLM -> answer)"
+        "Autonomous AI Web Scraper and RAG API: "
+        "Agent Task Execution (tools: Amazon India search, scraping, RAG) & "
+        "Decoupled Ingestion & QA Pipelines."
     ),
-    version="2.0.0",
+    version="3.0.0",
 )
 
 # Initialize distinct services
 vector_store_manager = get_vector_store_manager()
 ingestion_service = IngestionService(vector_store_manager=vector_store_manager)
 qa_service = QAService(vector_store_manager=vector_store_manager)
+agent_service = get_agent_service()
 
 
 # ---------------------------------------------------------
@@ -128,11 +135,30 @@ class QueryResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    groq_service: str
     ollama_service: str
     embedding_model: str
     llm_model: str
     langsmith_tracing: bool
     langsmith_project: Optional[str]
+
+
+class AgentTaskRequest(BaseModel):
+    task: str = Field(
+        ...,
+        min_length=2,
+        description="Natural language task or command for the agent (e.g. 'Find me DDR5 RAM deals on Amazon under 10000')",
+    )
+
+
+class AgentTaskResponse(BaseModel):
+    task: str
+    tool_called: Optional[str] = None
+    tool_arguments: Optional[Dict[str, Any]] = None
+    stats: Optional[Dict[str, Any]] = None
+    products: List[Dict[str, Any]] = []
+    explanation: str
+    model: str
 
 
 # ---------------------------------------------------------
@@ -142,12 +168,16 @@ class HealthResponse(BaseModel):
 async def root():
     return {
         "name": "Web Scraper AI Tool API",
-        "description": "Decoupled Ingestion Pipeline and Question Answering Pipeline",
+        "description": "Autonomous Agent Research, Tool Execution & Decoupled Ingestion/QA Pipelines",
         "workflows": {
+            "research": "natural language task -> GPT-OSS 120B -> search_amazon -> retrieve products -> extract Product models -> filter/compare -> final answer (POST /api/research)",
+            "agent": "natural language task -> LLM selects tool -> tool executes -> deterministic Python logic -> LLM explanation (POST /api/agent/task)",
             "ingestion": "fetch webpage -> clean html -> chunk -> embed -> ChromaDB (POST /api/scrape)",
-            "qa": "embed question -> ChromaDB -> top-k chunks -> Granite LLM -> answer (POST /api/query)",
+            "qa": "embed question -> ChromaDB -> top-k chunks -> Groq LLM -> answer (POST /api/query)",
         },
         "endpoints": {
+            "POST /api/research": "Execute autonomous shopping research with structured Product schema & deterministic comparison",
+            "POST /api/agent/task": "Execute autonomous agent task with tool selection & structured data",
             "POST /api/scrape": "Execute ingestion pipeline for a webpage",
             "POST /api/query": "Execute question answering pipeline against indexed webpage",
             "GET /health": "Check system and model health status",
@@ -158,7 +188,7 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse, response_class=JSONResponse)
 async def health_check():
-    # Check Ollama service
+    # Check Ollama service (used for embeddings)
     ollama_ok = False
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -167,14 +197,37 @@ async def health_check():
     except Exception:
         ollama_ok = False
 
+    # Check Groq API service
+    groq_key = os.getenv("GROQ_API_KEY")
+    groq_ok = False
+    groq_status_str = "missing GROQ_API_KEY in .env"
+    if groq_key:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={"Authorization": f"Bearer {groq_key}"},
+                )
+                if resp.status_code == 200:
+                    groq_ok = True
+                    groq_status_str = "connected"
+                else:
+                    groq_status_str = f"API error (HTTP {resp.status_code})"
+        except Exception as e:
+            groq_status_str = f"unreachable ({str(e)})"
+
     tracing_enabled = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
     project_name = os.getenv("LANGCHAIN_PROJECT")
+    current_llm_model = getattr(qa_service, "llm_model", os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"))
+
+    is_healthy = ollama_ok and groq_ok
 
     return HealthResponse(
-        status="healthy" if ollama_ok else "degraded",
-        ollama_service="connected" if ollama_ok else "unreachable (ensure Ollama is running)",
+        status="healthy" if is_healthy else "degraded",
+        groq_service=groq_status_str,
+        ollama_service="connected" if ollama_ok else "unreachable (ensure Ollama is running for embeddings)",
         embedding_model="nomic-embed-text",
-        llm_model="granite3-dense:2b",
+        llm_model=current_llm_model,
         langsmith_tracing=tracing_enabled,
         langsmith_project=project_name,
     )
@@ -275,6 +328,70 @@ async def query_endpoint(request: QueryRequest):
         query=qa_result["query"],
         model=qa_result["model"],
     )
+
+
+@app.post("/api/agent/task", response_model=AgentTaskResponse, response_class=JSONResponse)
+async def agent_task_endpoint(request: AgentTaskRequest):
+    """
+    Autonomous Agent Task Execution:
+    task -> LLM selects tool -> tool execution (structured data) -> deterministic Python logic -> LLM explanation
+    """
+    try:
+        result = await agent_service.run_task(task=request.task)
+        return AgentTaskResponse(
+            task=result["task"],
+            tool_called=result.get("tool_called"),
+            tool_arguments=result.get("tool_arguments"),
+            tools_called=result.get("tools_called"),
+            steps_taken=result.get("steps_taken", []),
+            stats=result.get("stats"),
+            products=result.get("products", []),
+            detailed_products=result.get("detailed_products", []),
+            comparison=result.get("comparison"),
+            explanation=result["explanation"],
+            model=result["model"],
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Agent task execution failed: {str(e)}",
+        )
+
+
+@app.post("/api/research", response_model=ResearchResponse, response_class=JSONResponse)
+async def research_endpoint(request: ResearchRequest):
+    """
+    Autonomous Research Endpoint:
+    Task -> GPT-OSS 120B multi-step loop -> search_amazon -> get_product_details -> compare_products -> final synthesis
+    """
+    try:
+        result = await agent_service.run_task(task=request.task)
+        parsed_products: List[Product] = []
+        for p in result.get("products", []):
+            try:
+                parsed_products.append(Product.model_validate(p))
+            except Exception:
+                pass
+
+        return ResearchResponse(
+            task=result["task"],
+            tool_called=result.get("tool_called"),
+            tool_arguments=result.get("tool_arguments"),
+            tools_called=result.get("tools_called", []),
+            steps_taken=result.get("steps_taken", []),
+            stats=result.get("stats"),
+            products=parsed_products,
+            detailed_products=result.get("detailed_products", []),
+            comparison=result.get("comparison"),
+            final_answer=result.get("final_answer") or result.get("explanation", ""),
+            model=result["model"],
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Research task execution failed: {str(e)}",
+        )
+
 
 
 if __name__ == "__main__":
