@@ -1,7 +1,9 @@
 import os
+import re
 import json
 import math
-from typing import Dict, Any, List, Optional
+import time
+from typing import Dict, Any, List, Optional, AsyncGenerator
 from dotenv import load_dotenv
 
 # Ensure environment variables are loaded
@@ -522,6 +524,105 @@ def extract_information(text: str, schema_description: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Query Intent & Consideration Analyzer
+# ---------------------------------------------------------------------------
+def analyze_task_intent(task: str) -> Dict[str, Any]:
+    """
+    Analyzes user task to extract optimization goal, budget constraints, form factor, and intent summary.
+    """
+    task_clean = task.strip()
+    task_lower = task_clean.lower()
+
+    # 1. Budget extraction
+    budget = "None"
+    budget_val = None
+    # match patterns like "under ₹50,000", "under 50000", "under 50k", "below 10,000", "budget 20000", "< 50000"
+    budget_match = re.search(
+        r'(?:under|below|less than|budget(?: of)?|max(?: price)?|<=?)\s*(?:₹|rs\.?|inr)?\s*([\d,]+(?:\.\d+)?|\d+k)',
+        task_lower,
+    )
+    if budget_match:
+        raw_val = budget_match.group(1).replace(",", "")
+        if raw_val.endswith("k"):
+            try:
+                budget_val = float(raw_val[:-1]) * 1000
+                budget = f"₹{int(budget_val):,}"
+            except ValueError:
+                pass
+        else:
+            try:
+                budget_val = float(raw_val)
+                budget = f"₹{int(budget_val):,}"
+            except ValueError:
+                pass
+
+    # Check for explicit statements that budget is not a constraint
+    no_budget_keywords = [
+        "don't care about the price", "dont care about the price",
+        "don't care about price", "dont care about price",
+        "no budget", "unlimited budget", "money is no object",
+        "regardless of price", "any price", "price doesn't matter",
+        "price does not matter", "price is no object", "not concerned about price"
+    ]
+    if any(k in task_lower for k in no_budget_keywords):
+        budget = "None"
+        budget_val = None
+
+    # 2. Optimization Intent
+    if any(k in task_lower for k in [
+        "raw performance", "absolute best", "fastest", "max performance",
+        "top performance", "highest speed", "overclock", "don't care about the price",
+        "dont care about the price", "no budget"
+    ]):
+        optimization = "Raw performance"
+        intent_summary = "raw performance"
+    elif any(k in task_lower for k in ["cheapest", "lowest price", "budget pick", "affordable", "cheapest entry", "entry level", "entry-level"]):
+        optimization = "Lowest price"
+        intent_summary = "lowest initial cost"
+    elif any(k in task_lower for k in ["highest rated", "top rated", "best reviews", "reliability", "most reliable"]):
+        optimization = "Highest customer rating"
+        intent_summary = "highest verified rating & reliability"
+    else:
+        optimization = "Best value (Perf / ₹)"
+        intent_summary = "optimal performance-to-price ratio"
+
+    # 3. Form Factor
+    if any(k in task_lower for k in ["sodimm", "so-dimm", "laptop", "notebook"]):
+        form_factor = "SODIMM"
+    elif any(k in task_lower for k in ["udimm", "desktop", "pc", "rig"]):
+        form_factor = "UDIMM"
+    else:
+        if "ram" in task_lower or "ddr" in task_lower:
+            form_factor = "UDIMM"
+        else:
+            form_factor = "Any"
+
+    # 4. Target Capacity
+    cap_match = re.search(r'(\d+)\s*gb', task_lower)
+    capacity = f"{cap_match.group(1)}GB" if cap_match else None
+
+    # Build structured considerations map
+    considerations: Dict[str, str] = {
+        "Optimization": optimization,
+        "Budget": budget,
+    }
+    if form_factor != "Any":
+        considerations["Form factor"] = form_factor
+    if capacity:
+        considerations["Capacity"] = capacity
+
+    return {
+        "intent_summary": intent_summary,
+        "optimization": optimization,
+        "budget": budget,
+        "budget_val": budget_val,
+        "form_factor": form_factor,
+        "capacity": capacity,
+        "considerations": considerations,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Agent Service (The Multi-Step Brain)
 # ---------------------------------------------------------------------------
 class AgentService:
@@ -740,6 +841,356 @@ class AgentService:
             "explanation": clean_final_answer,
             "model": self.llm_model,
         }
+
+    async def run_task_stream(
+        self,
+        task: str,
+        max_steps: int = 6,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Executes a task through an autonomous multi-step iterative loop,
+        yielding granular real-time events as each tool is selected and executed.
+        Enables true live tool execution traces in the UI.
+        """
+        llm = self.get_llm()
+        llm_with_tools = llm.bind_tools(self.tools)
+
+        system_instruction = (
+            "You are an intelligent, autonomous multi-step research and shopping agent specialized in computer hardware.\n"
+            "You have access to the following tools:\n"
+            "- search_amazon: Search Amazon India (amazon.in) for products by query with budget (max_price), rating, "
+            "capacity (capacity_gb), speed (speed_mhz), CL latency (cl_rating), and form factor (UDIMM for Desktop / SODIMM for Laptop) filters. "
+            "Returns structured candidate products with deterministic Value Scores.\n"
+            "- get_product_details: Fetches granular technical specifications for an Amazon India product URL (operating voltage, warranty, exact model, timings, bullets).\n"
+            "- compare_products: Deterministically compares 2 to 4 product URLs side-by-side (specs, price/GB, latency, voltage, pros/cons, and category verdicts).\n"
+            "- search_web: Alias for search_amazon.\n"
+            "- scrape_url: Scrapes general webpage content.\n"
+            "- search_rag: Search existing ChromaDB vector index for an indexed URL.\n"
+            "- extract_information: Extract specific schema attributes from text.\n\n"
+            "Autonomous Multi-Step Execution Strategy:\n"
+            "When asked to find deals or recommend computer hardware (e.g., 'Find me the best DDR5 RAM deal'):\n"
+            "1. Step 1: Call `search_amazon` ONCE with appropriate query and any specified constraints (e.g. form_factor='UDIMM' or 'SODIMM', capacity_gb, max_price). Do NOT repeat search_amazon calls.\n"
+            "2. Step 2: From the returned candidate results, pick the top 2 candidates and call `get_product_details` for their URLs to inspect their operating voltage, warranty, and technical specifications.\n"
+            "3. Step 3: Call `compare_products` with the candidate product URLs to generate a deterministic side-by-side comparison matrix and score verdict.\n"
+            "4. Step 4: Synthesize your definitive recommendation with a Markdown comparison table, hardware justification, and purchase advice.\n\n"
+            "Evaluation Rules:\n"
+            "- Value Score vs Cheapest: The cheapest item (e.g. 8GB stick) is NOT necessarily the best deal. Use the deterministic 'value_score' to crown the best deal.\n"
+            "- Raw Performance vs Value: If the user specifically asks for raw performance or the absolute best kit (e.g. 'I don't care about the price'), prioritize top clock speed (MHz) and lowest CAS latency (CL) over price-per-GB.\n"
+            "- Form Factor Compatibility: Always distinguish Desktop (UDIMM) and Laptop (SODIMM) memory.\n"
+            "- Hardware Justification: Highlight speed, CAS latency, voltage, and warranty in your explanation."
+        )
+
+        yield {
+            "type": "start",
+            "task": task,
+            "timestamp": time.time(),
+        }
+
+        # Intent Analysis & Considerations extraction
+        intent_info = analyze_task_intent(task)
+        yield {
+            "type": "planning",
+            "step": 1,
+            "title": "Planning",
+            "intent": intent_info["intent_summary"],
+            "message": f"Understanding user intent: {intent_info['intent_summary']}",
+            "considerations": intent_info["considerations"],
+            "optimization": intent_info["optimization"],
+            "budget": intent_info["budget"],
+        }
+
+        messages: List[Any] = [
+            SystemMessage(content=system_instruction),
+            HumanMessage(content=task),
+        ]
+
+        step = 0
+        steps_taken: List[Dict[str, Any]] = []
+        tools_called_list: List[str] = []
+        structured_data: Dict[str, Any] = {}
+        all_products: List[Dict[str, Any]] = []
+        detailed_products: List[Dict[str, Any]] = []
+        comparison_data: Optional[Dict[str, Any]] = None
+        final_answer: str = ""
+
+        try:
+            while step < max_steps:
+                yield {
+                    "type": "step_start",
+                    "step": step + 1,
+                    "message": f"Step {step + 1}: Agent reasoning and tool selection...",
+                }
+
+                # Call LLM with automatic retry on TPM rate limit
+                response = None
+                for retry_i in range(3):
+                    try:
+                        response = await llm_with_tools.ainvoke(messages)
+                        break
+                    except Exception as e:
+                        err_msg = str(e).lower()
+                        if ("413" in err_msg or "rate_limit" in err_msg or "tpm" in err_msg or "429" in err_msg) and retry_i < 2:
+                            yield {
+                                "type": "warning",
+                                "message": f"Groq TPM rate limit hit, backing off ({5 * (retry_i + 1)}s)...",
+                            }
+                            await asyncio.sleep(5.0 * (retry_i + 1))
+                        else:
+                            raise
+
+                messages.append(response)
+
+                # Check if LLM finished and produced final content with no further tool calls
+                if not response.tool_calls:
+                    final_answer = response.content if isinstance(response.content, str) else str(response.content)
+                    break
+
+                if any(tc["name"] == "get_product_details" for tc in response.tool_calls):
+                    yield {
+                        "type": "agent_thought",
+                        "step": step + 1,
+                        "title": "Agent decision",
+                        "message": "Detailed specifications required",
+                    }
+                elif not any(tc["name"] in ["search_amazon", "search_web", "compare_products"] for tc in response.tool_calls):
+                    yield {
+                        "type": "agent_thought",
+                        "step": step + 1,
+                        "title": "Agent decision",
+                        "message": f"Agent selected {len(response.tool_calls)} tool(s) to execute",
+                    }
+
+                # Execute tool calls emitted in this step
+                for tc in response.tool_calls:
+                    tool_name = tc["name"]
+                    tool_args = tc["args"]
+                    tool_id = tc["id"]
+                    tools_called_list.append(tool_name)
+
+                    start_t = time.time()
+                    if tool_name in ["search_amazon", "search_web"]:
+                        q = tool_args.get("query") or "DDR5 RAM"
+                        ff = tool_args.get("form_factor") or intent_info.get("form_factor", "UDIMM")
+                        formatted_params = {
+                            "Query": q,
+                            "Form factor": ff,
+                        }
+                        if tool_args.get("max_price"):
+                            formatted_params["Budget"] = f"₹{int(tool_args['max_price']):,}"
+                        elif intent_info.get("budget") != "None":
+                            formatted_params["Budget"] = intent_info.get("budget")
+                        else:
+                            formatted_params["Budget"] = "None"
+
+                        if intent_info.get("optimization") == "Raw performance" or tool_args.get("optimization") == "performance":
+                            formatted_params["Optimization"] = "Raw performance"
+                        elif tool_args.get("optimization"):
+                            formatted_params["Optimization"] = tool_args.get("optimization")
+
+                        yield {
+                            "type": "tool_start",
+                            "step": step + 1,
+                            "title": "Tool selected",
+                            "tool": tool_name,
+                            "tool_display": "search_amazon",
+                            "formatted_params": formatted_params,
+                            "args": tool_args,
+                            "tool_id": tool_id,
+                        }
+                    elif tool_name == "get_product_details":
+                        details_count = sum(1 for c in response.tool_calls if c["name"] == "get_product_details")
+                        tool_display = f"get_product_details × {details_count}" if details_count > 1 else "get_product_details"
+                        yield {
+                            "type": "tool_start",
+                            "step": step + 1,
+                            "title": "Tool selected",
+                            "tool": tool_name,
+                            "tool_display": tool_display,
+                            "summary": "Fetching technical specifications",
+                            "args": tool_args,
+                            "tool_id": tool_id,
+                        }
+                    elif tool_name == "compare_products":
+                        yield {
+                            "type": "tool_start",
+                            "step": step + 1,
+                            "title": "Comparison",
+                            "tool": tool_name,
+                            "tool_display": "compare_products",
+                            "summary": "Comparing frequency, capacity, CAS latency and voltage",
+                            "args": tool_args,
+                            "tool_id": tool_id,
+                        }
+                    else:
+                        yield {
+                            "type": "tool_start",
+                            "step": step + 1,
+                            "title": "Tool selected",
+                            "tool": tool_name,
+                            "tool_display": tool_name,
+                            "args": tool_args,
+                            "tool_id": tool_id,
+                        }
+
+                    selected_tool = self.tools_by_name.get(tool_name)
+                    if selected_tool:
+                        tool_output_str = await selected_tool.ainvoke(tool_args)
+                        duration_s = round(time.time() - start_t, 2)
+
+                        try:
+                            parsed_out = json.loads(tool_output_str)
+                        except Exception:
+                            parsed_out = {"raw_output": tool_output_str}
+
+                        summary_msg = f"Completed {tool_name}"
+                        if tool_name in ["search_amazon", "search_web"]:
+                            structured_data = parsed_out
+                            prods = parsed_out.get("products", [])
+                            if prods:
+                                all_products = prods
+                            total_scraped = parsed_out.get("total_scraped", len(prods))
+                            top_candidates = min(5, len(prods))
+                            yield {
+                                "type": "tool_end",
+                                "step": step + 1,
+                                "tool": tool_name,
+                                "summary": f"Found {total_scraped} products on Amazon India",
+                                "data": parsed_out,
+                                "duration_s": duration_s,
+                            }
+                            yield {
+                                "type": "deterministic_ranking",
+                                "step": step + 1,
+                                "title": "Deterministic ranking",
+                                "evaluated_count": total_scraped,
+                                "selected_count": top_candidates,
+                                "summary": f"Evaluated {total_scraped} products\nSelected top {top_candidates} candidates",
+                                "best_value": parsed_out.get("best_value"),
+                                "cheapest": parsed_out.get("cheapest"),
+                                "data": parsed_out,
+                            }
+                        elif tool_name == "get_product_details":
+                            detailed_products.append(parsed_out)
+                            p_name = parsed_out.get("name", "Product")[:60]
+                            summary_msg = f"Extracted specs for {p_name}"
+                            yield {
+                                "type": "tool_end",
+                                "step": step + 1,
+                                "tool": tool_name,
+                                "summary": summary_msg,
+                                "data": parsed_out,
+                                "duration_s": duration_s,
+                            }
+                        elif tool_name == "compare_products":
+                            comparison_data = parsed_out
+                            summary_msg = "Comparing frequency, capacity, CAS latency and voltage"
+                            yield {
+                                "type": "tool_end",
+                                "step": step + 1,
+                                "tool": tool_name,
+                                "summary": summary_msg,
+                                "data": parsed_out,
+                                "duration_s": duration_s,
+                            }
+                        else:
+                            yield {
+                                "type": "tool_end",
+                                "step": step + 1,
+                                "tool": tool_name,
+                                "summary": summary_msg,
+                                "data": parsed_out,
+                                "duration_s": duration_s,
+                            }
+
+                        steps_taken.append({
+                            "step": step + 1,
+                            "tool": tool_name,
+                            "arguments": tool_args,
+                            "duration_s": duration_s,
+                        })
+
+                        messages.append(
+                            ToolMessage(
+                                tool_call_id=tool_id,
+                                name=tool_name,
+                                content=tool_output_str,
+                            )
+                        )
+                    else:
+                        messages.append(
+                            ToolMessage(
+                                tool_call_id=tool_id,
+                                name=tool_name,
+                                content=json.dumps({"error": f"Tool '{tool_name}' is not recognized."}),
+                            )
+                        )
+
+                step += 1
+
+            # Fallback synthesis if final_answer is empty
+            if not final_answer or not final_answer.strip():
+                yield {
+                    "type": "synthesis_start",
+                    "step": step,
+                    "title": "Final synthesis",
+                    "message": "Generating recommendation",
+                }
+                synthesis_messages = [
+                    SystemMessage(
+                        content=(
+                            "You are an expert computer hardware shopping advisor. "
+                            "Based on the collected multi-step research data, provide a definitive, structured recommendation. "
+                            "Include a Markdown comparison table, explain why the best value product wins using its Value Score, "
+                            "and verify RAM form factor (UDIMM vs SODIMM), speed, CL latency, voltage, and warranty."
+                        )
+                    ),
+                    HumanMessage(
+                        content=(
+                            f"User Task: {task}\n\n"
+                            f"Search Products:\n{json.dumps(all_products[:6], indent=2)}\n\n"
+                            f"Detailed Products Inspected:\n{json.dumps(detailed_products, indent=2)}\n\n"
+                            f"Comparison Results:\n{json.dumps(comparison_data, indent=2) if comparison_data else 'N/A'}\n\n"
+                            "Please write the final recommendation."
+                        )
+                    ),
+                ]
+                for retry_i in range(3):
+                    try:
+                        synth_res = await llm.ainvoke(synthesis_messages)
+                        final_answer = synth_res.content if isinstance(synth_res.content, str) else str(synth_res.content)
+                        break
+                    except Exception as e:
+                        err_msg = str(e).lower()
+                        if ("413" in err_msg or "rate_limit" in err_msg or "tpm" in err_msg or "429" in err_msg) and retry_i < 2:
+                            await asyncio.sleep(5.0 * (retry_i + 1))
+                        else:
+                            raise
+            else:
+                yield {
+                    "type": "synthesis_start",
+                    "step": step + 1,
+                    "title": "Final synthesis",
+                    "message": "Generating recommendation",
+                }
+
+            clean_final_answer = final_answer.strip()
+            yield {
+                "type": "final_response",
+                "final_answer": clean_final_answer,
+                "products": all_products,
+                "detailed_products": detailed_products,
+                "comparison": comparison_data,
+                "stats": structured_data.get("stats"),
+                "steps_taken": steps_taken,
+                "model": self.llm_model,
+            }
+
+        except Exception as e:
+            yield {
+                "type": "error",
+                "error": str(e),
+            }
+
 
 
 # Default singleton instance

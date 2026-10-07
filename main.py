@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional
+import json
 from typing import List, Optional, Dict, Any
 from dotenv import load_dotenv
 
@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, status, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, HttpUrl, Field
 import httpx
@@ -164,18 +165,48 @@ class AgentTaskResponse(BaseModel):
 # ---------------------------------------------------------
 # API Endpoints
 # ---------------------------------------------------------
-@app.get("/", response_class=JSONResponse)
-async def root():
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(STATIC_DIR, exist_ok=True)
+
+
+@app.get("/", include_in_schema=False)
+async def serve_root(request: Request):
+    accept = request.headers.get("accept", "")
+    # If client explicitly asks for application/json and not HTML, return API metadata
+    if "application/json" in accept and "text/html" not in accept:
+        return {
+            "name": "Web Scraper AI Tool API",
+            "description": "Autonomous Agent Research, Tool Execution & Decoupled Ingestion/QA Pipelines",
+            "workflows": {
+                "research": "natural language task -> GPT-OSS 120B -> search_amazon -> retrieve products -> extract Product models -> filter/compare -> final answer (POST /api/research)",
+                "agent": "natural language task -> LLM selects tool -> tool executes -> deterministic Python logic -> LLM explanation (POST /api/agent/task)",
+                "stream": "real-time SSE tool execution traces (POST /api/agent/stream)",
+                "ingestion": "fetch webpage -> clean html -> chunk -> embed -> ChromaDB (POST /api/scrape)",
+                "qa": "embed question -> ChromaDB -> top-k chunks -> Groq LLM -> answer (POST /api/query)",
+            },
+        }
+
+    index_file = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
+    return JSONResponse(content={"message": "Web Scraper AI API is running. UI not found in static/."})
+
+
+@app.get("/api", response_class=JSONResponse)
+async def api_info():
     return {
         "name": "Web Scraper AI Tool API",
         "description": "Autonomous Agent Research, Tool Execution & Decoupled Ingestion/QA Pipelines",
         "workflows": {
             "research": "natural language task -> GPT-OSS 120B -> search_amazon -> retrieve products -> extract Product models -> filter/compare -> final answer (POST /api/research)",
             "agent": "natural language task -> LLM selects tool -> tool executes -> deterministic Python logic -> LLM explanation (POST /api/agent/task)",
+            "stream": "real-time SSE tool execution traces (POST /api/agent/stream)",
             "ingestion": "fetch webpage -> clean html -> chunk -> embed -> ChromaDB (POST /api/scrape)",
             "qa": "embed question -> ChromaDB -> top-k chunks -> Groq LLM -> answer (POST /api/query)",
         },
         "endpoints": {
+            "GET /": "Interactive HTML/CSS/JS UI Frontend",
+            "POST /api/agent/stream": "Real-time Server-Sent Events (SSE) tool execution traces",
             "POST /api/research": "Execute autonomous shopping research with structured Product schema & deterministic comparison",
             "POST /api/agent/task": "Execute autonomous agent task with tool selection & structured data",
             "POST /api/scrape": "Execute ingestion pipeline for a webpage",
@@ -184,6 +215,7 @@ async def root():
             "GET /docs": "Interactive Swagger UI documentation",
         },
     }
+
 
 
 @app.get("/health", response_model=HealthResponse, response_class=JSONResponse)
@@ -393,7 +425,62 @@ async def research_endpoint(request: ResearchRequest):
         )
 
 
+class StreamTaskRequest(BaseModel):
+    task: str = Field(..., min_length=2, description="Natural language task or command for the agent")
+
+
+@app.post("/api/agent/stream")
+async def agent_stream_post_endpoint(request: StreamTaskRequest):
+    """
+    Server-Sent Events (SSE) streaming endpoint for real-time tool execution traces.
+    Streams granular events as the agent reasons, invokes tools, computes rankings, and synthesizes answers.
+    """
+    async def event_generator():
+        try:
+            async for event in agent_service.run_task_stream(task=request.task):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/agent/stream")
+async def agent_stream_get_endpoint(task: str):
+    """
+    GET Server-Sent Events endpoint for easy browser EventSource testing.
+    """
+    async def event_generator():
+        try:
+            async for event in agent_service.run_task_stream(task=task):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+

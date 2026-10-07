@@ -46,7 +46,8 @@ Instead of requiring users to supply static URLs or feeding raw HTML blobs into 
 
 ## 🚀 Key Features
 
-- **🧠 Autonomous Multi-Step ReAct Agent (`agent_service.py`)**: The agent dynamically chains multiple specialized tools across iterative reasoning turns (search candidates -> inspect top candidates in depth -> compare deterministically -> synthesize expert recommendation).
+- **💻 Interactive Web UI Frontend (`/`)**: Modern, zero-framework Vanilla HTML5/CSS3/ES6 interface with dark glassmorphism styling, live backend health telemetry, quick query preset chips, and dual modes (Autonomous Agent & RAG QA).
+- **📡 Real-Time Tool Execution Trace (SSE Streaming `POST /api/agent/stream`)**: True Server-Sent Events (SSE) streaming visualizes every tool invocation as it happens (search -> ranking -> deep inspection -> compare -> synthesis) with live execution timers, pulsing animations, and collapsible `<details>` to inspect exact input parameters and JSON outputs.
 - **🛍️ Amazon India Structured Scraper (`structured_scraper.py`)**: Converts Amazon search result and product detail pages into typed `Product` and `ProductDetail` models with prices (INR), memory sizes, clock speeds, CAS latency, ratings, review counts, form factors, kit sizes, operating voltage, warranty, and canonical URLs.
 - **🔬 Deep Hardware Spec Inspection (`get_product_details`)**: Inspects individual product pages to extract granular technical tables (Brand, Model, Memory Speed, Operating Voltage, Form Factor, Pin Count, Item Model Number, Country of Origin, Warranty) and feature highlights.
 - **⚖️ Deterministic Product Comparison (`compare_products`)**: Side-by-side spec comparison matrix with pros/cons calculation, price-per-GB, and categorical verdicts (`best_value`, `best_performance`, `budget_pick`).

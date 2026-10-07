@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Autonomous Web Scraper AI</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- Lightweight client-side Markdown parser -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+</head>
+<body>
+  <!-- Header & System Telemetry -->
+  <header class="app-header">
+    <div class="header-brand">
+      <div class="brand-icon">🤖</div>
+      <div class="brand-info">
+        <h1>Web Scraper AI</h1>
+        <span class="brand-tagline">Autonomous Multi-Step Hardware Intelligence</span>
+      </div>
+    </div>
+
+    <!-- Health Telemetry Pills -->
+    <div class="header-telemetry">
+      <div id="healthBadge" class="telemetry-pill status-checking">
+        <span class="status-dot"></span>
+        <span id="healthStatusText">Checking API...</span>
+      </div>
+      <div class="telemetry-pill">
+        <span class="pill-label">LLM:</span>
+        <span id="llmModelBadge" class="pill-val">openai/gpt-oss-120b</span>
+      </div>
+      <div class="telemetry-pill">
+        <span class="pill-label">Embed:</span>
+        <span id="embedModelBadge" class="pill-val">nomic-embed-text</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Navigation Mode Tabs -->
+  <nav class="nav-tabs" aria-label="Application Tabs">
+    <button class="nav-tab active" data-tab="agentTab" id="agentTabBtn">
+      <span class="tab-icon">🤖</span> Autonomous Agent Research
+    </button>
+    <button class="nav-tab" data-tab="ragTab" id="ragTabBtn">
+      <span class="tab-icon">📚</span> Web Scraper & RAG QA
+    </button>
+  </nav>
+
+  <!-- Main Content Area -->
+  <main class="main-layout">
+    
+    <!-- ================================================================= -->
+    <!-- TAB 1: AUTONOMOUS AGENT RESEARCH -->
+    <!-- ================================================================= -->
+    <div id="agentTab" class="tab-pane active">
+      <div class="agent-grid">
+        
+        <!-- Left Panel: Input & Controls -->
+        <section class="panel input-panel">
+          <div class="panel-header">
+            <h2>Research Task</h2>
+            <span class="panel-subtitle">Natural language shopping query</span>
+          </div>
+
+          <form id="agentForm" class="task-form">
+            <div class="textarea-wrapper">
+              <textarea 
+                id="taskInput" 
+                rows="4" 
+                placeholder="e.g. Find me the best DDR5 RAM deals on Amazon under ₹50,000..." 
+                required
+              ></textarea>
+            </div>
+
+            <!-- Quick Preset Chips -->
+            <div class="prompt-chips">
+              <span class="chips-title">Quick Tasks:</span>
+              <button type="button" class="chip" data-query="Find me the best DDR5 RAM deal on Amazon">
+                ⚡ Best DDR5 RAM Deal
+              </button>
+              <button type="button" class="chip" data-query="Find me DDR5 RAM deals on Amazon under 50000">
+                💰 DDR5 Under ₹50,000
+              </button>
+              <button type="button" class="chip" data-query="Find me 32GB DDR5 6000MHz CL30 Desktop UDIMM RAM on Amazon">
+                🎮 32GB 6000MHz CL30 Desktop
+              </button>
+              <button type="button" class="chip" data-query="Find me laptop DDR5 SODIMM RAM on Amazon under 30000">
+                💻 Laptop SODIMM DDR5
+              </button>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" id="runAgentBtn" class="btn btn-primary">
+                <span class="btn-icon">⚡</span>
+                <span class="btn-text">Execute Multi-Step Agent</span>
+              </button>
+              <button type="button" id="clearBtn" class="btn btn-secondary">
+                Clear
+              </button>
+            </div>
+          </form>
+
+          <!-- Instructions Card -->
+          <div class="info-card">
+            <h3>Autonomous Execution Pipeline</h3>
+            <p>The agent dynamically chains multiple specialized tools:</p>
+            <ol class="pipeline-list">
+              <li><strong>search_amazon:</strong> Finds candidate products from Amazon</li>
+              <li><strong>Deterministic Ranking:</strong> Computes Value Scores (MHz, CL, INR/GB)</li>
+              <li><strong>get_product_details:</strong> Deep inspection of voltage & timings</li>
+              <li><strong>compare_products:</strong> Head-to-head spec comparison</li>
+              <li><strong>Final Synthesis:</strong> Synthesizes expert hardware recommendation</li>
+            </ol>
+          </div>
+        </section>
+
+        <!-- Center Panel: Real Tool Execution Trace (Live Timeline) -->
+        <section class="panel trace-panel">
+          <div class="panel-header trace-header">
+            <div>
+              <h2>Live Tool Execution Trace</h2>
+              <span class="panel-subtitle">Real-time telemetry of agent actions & tools</span>
+            </div>
+            <div id="traceStatusBadge" class="badge badge-idle">Ready</div>
+          </div>
+
+          <div class="trace-container" id="traceContainer">
+            <!-- Default Empty State -->
+            <div id="traceEmptyState" class="empty-state">
+              <div class="empty-icon">🧭</div>
+              <p>Submit a task to see real-time tool traces appear here as the agent explores, scrapes, and compares hardware.</p>
+            </div>
+
+            <!-- Dynamic Trace Timeline -->
+            <div id="traceTimeline" class="trace-timeline" style="display: none;">
+              <!-- Timeline nodes inserted dynamically by JS -->
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- Bottom / Output Panel: Final Results & Comparison -->
+      <section class="panel results-panel" id="resultsSection" style="display: none;">
+        <div class="results-header">
+          <div class="results-tabs">
+            <button class="res-tab active" data-res-tab="markdownView">
+              📄 Final Recommendation
+            </button>
+            <button class="res-tab" data-res-tab="productsView">
+              🛍️ Discovered Products (<span id="productsCountBadge">0</span>)
+            </button>
+            <button class="res-tab" data-res-tab="comparisonView">
+              ⚖️ Head-to-Head Comparison
+            </button>
+            <button class="res-tab" data-res-tab="rawJsonView">
+              🔍 Raw JSON Trace
+            </button>
+          </div>
+
+          <button id="copyRecommendationBtn" class="btn btn-sm btn-secondary">
+            📋 Copy Response
+          </button>
+        </div>
+
+        <div class="results-content">
+          <!-- 1. Markdown Recommendation View -->
+          <div id="markdownView" class="res-pane active">
+            <div id="recommendationContent" class="markdown-body">
+              <!-- Rendered markdown goes here -->
+            </div>
+          </div>
+
+          <!-- 2. Product Cards Gallery View -->
+          <div id="productsView" class="res-pane">
+            <div id="productsGrid" class="products-grid">
+              <!-- Cards inserted dynamically -->
+            </div>
+          </div>
+
+          <!-- 3. Comparison Matrix View -->
+          <div id="comparisonView" class="res-pane">
+            <div id="comparisonContainer">
+              <!-- Comparison table inserted dynamically -->
+            </div>
+          </div>
+
+          <!-- 4. Raw JSON View -->
+          <div id="rawJsonView" class="res-pane">
+            <pre class="json-viewer"><code id="rawJsonContent">{}</code></pre>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- TAB 2: WEB SCRAPER & RAG QA PIPELINE -->
+    <!-- ================================================================= -->
+    <div id="ragTab" class="tab-pane">
+      <div class="rag-grid">
+        
+        <!-- Scrape / Ingestion Box -->
+        <section class="panel">
+          <div class="panel-header">
+            <h2>1. Webpage Ingestion Pipeline</h2>
+            <span class="panel-subtitle">fetch → clean → chunk → embed → ChromaDB</span>
+          </div>
+
+          <form id="scrapeForm" class="task-form">
+            <div class="input-group">
+              <label for="scrapeUrlInput">Webpage URL to Ingest:</label>
+              <input 
+                type="url" 
+                id="scrapeUrlInput" 
+                placeholder="https://example.com" 
+                required
+              />
+            </div>
+
+            <div class="checkbox-group">
+              <label>
+                <input type="checkbox" id="forceRefreshCheckbox" />
+                Force re-scrape and re-embed if already indexed
+              </label>
+            </div>
+
+            <button type="submit" id="scrapeBtn" class="btn btn-primary">
+              📥 Scrape & Store in ChromaDB
+            </button>
+          </form>
+
+          <div id="scrapeResult" class="result-box" style="display: none;"></div>
+        </section>
+
+        <!-- Query / QA Box -->
+        <section class="panel">
+          <div class="panel-header">
+            <h2>2. Question Answering (RAG)</h2>
+            <span class="panel-subtitle">embed question → ChromaDB → top-k → Groq LLM → answer</span>
+          </div>
+
+          <form id="queryForm" class="task-form">
+            <div class="input-group">
+              <label for="queryUrlInput">Target Indexed URL:</label>
+              <input 
+                type="url" 
+                id="queryUrlInput" 
+                placeholder="https://example.com" 
+                required
+              />
+            </div>
+
+            <div class="input-group">
+              <label for="queryQuestionInput">Question about Webpage:</label>
+              <textarea 
+                id="queryQuestionInput" 
+                rows="3" 
+                placeholder="e.g. What is the main purpose of this domain?" 
+                required
+              ></textarea>
+            </div>
+
+            <button type="submit" id="queryBtn" class="btn btn-primary">
+              ❓ Ask QA Pipeline
+            </button>
+          </form>
+
+          <div id="queryResult" class="result-box" style="display: none;"></div>
+        </section>
+
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="app-footer">
+    <span>Autonomous Web Scraper AI • Powered by Groq LPUs (GPT-OSS 120B) & ChromaDB</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
