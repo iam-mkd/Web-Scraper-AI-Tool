@@ -35,7 +35,7 @@ class IngestionService:
         1. Checks if already indexed (skips re-scraping unless force_refresh=True)
         2. Fetches webpage and cleans HTML
         3. Chunks text with overlap
-        4. Embeds chunks with nomic-embed-text
+        4. Embeds chunks with google/embeddinggemma-2
         5. Persists vectors into ChromaDB
         """
         url_str = str(url)

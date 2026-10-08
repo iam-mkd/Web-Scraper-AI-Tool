@@ -18,7 +18,7 @@ Instead of requiring users to supply static URLs or feeding raw HTML blobs into 
    $$\text{Value Score} = \text{Performance (MHz \& CL)} + \text{Capacity} + \text{Rating} + \text{Review Confidence} - \text{Price Penalty (Price/GB)}$$
    Prevents an 8GB stick from being falsely branded as the "best deal" simply because it has the lowest absolute price.
 6. **Generates natural language answers** using ultra-fast **Groq LPU Inference** (`openai/gpt-oss-120b`).
-7. **Maintains decoupled Ingestion & QA RAG pipelines** backed by **ChromaDB** and **Ollama `nomic-embed-text`**.
+7. **Maintains decoupled Ingestion & QA RAG pipelines** backed by **ChromaDB** and **Google EmbeddingGemma-2 (`google/embeddinggemma-2`)** via **`sentence-transformers`**.
 
 ---
 
@@ -56,7 +56,7 @@ Instead of requiring users to supply static URLs or feeding raw HTML blobs into 
 - **🖥️ Desktop vs. Laptop RAM Separation**: Identifies form factors (`UDIMM` vs. `SODIMM`) and kit configurations (`1x8GB`, `2x16GB`, etc.).
 - **🛡️ Anti-Bot Bypass (`scraper.py`)**: Uses `curl-cffi` to mimic authentic browser TLS/JA3 handshakes and HTTP/2 framing with automatic retry backoff.
 - **⚡ Ultra-Fast Inference via Groq**: Powered by `openai/gpt-oss-120b` (120B parameter model) on Groq LPUs for sub-second tool planning and synthesis.
-- **💾 Local Vector RAG Pipeline**: Decoupled ingestion and retrieval using Ollama `nomic-embed-text` (768-dim embeddings) and persistent `ChromaDB`.
+- **💾 Local Vector RAG Pipeline**: Decoupled ingestion and retrieval using Google EmbeddingGemma-2 (`google/embeddinggemma-2`) via `sentence-transformers` (768-dim embeddings) and persistent `ChromaDB`.
 - **🔍 Full LangSmith Traceability**: Native tracking for every retrieval, prompt assembly, latency metric, and token count.
 - **📦 Strict JSON REST API**: Built on `FastAPI` with comprehensive Pydantic validation and strict JSON error handlers.
 
@@ -86,7 +86,7 @@ Instead of requiring users to supply static URLs or feeding raw HTML blobs into 
        Step 2: get_product_details()                               ┌─────────────────────┐
        Step 3: compare_products() │                                │ Vector Store Layer  │
                                   ▼                                │ • ChromaDB vectors  │
-       ┌────────────────────────────────────────────────────────┐  │ • nomic-embed-text  │
+       ┌────────────────────────────────────────────────────────┐  │ • embeddinggemma-2  │
        │ Structured Tools & Scrapers (structured_scraper.py)    │  └─────────────────────┘
        │ ├── search_amazon: Scrapes candidates + Value Scores   │
        │ ├── get_product_details: Granular voltage & warranty   │
@@ -114,7 +114,7 @@ Instead of requiring users to supply static URLs or feeding raw HTML blobs into 
 | **Language** | [Python 3.13+](https://www.python.org/) | Core programming language |
 | **Agent & Tools** | [LangChain](https://www.langchain.com/) (`langchain-groq`, `langchain-core`) | Tool binding, message chaining, agent orchestration |
 | **LLM Inference** | [Groq](https://groq.com/) (`openai/gpt-oss-120b`) | Ultra-fast cloud inference for tool calling and reasoning |
-| **Embeddings** | [Ollama](https://ollama.com/) (`nomic-embed-text`) | 768-dimensional dense vector embeddings |
+| **Embeddings** | [SentenceTransformers](https://sbert.net/) (`google/embeddinggemma-2`) | 768-dimensional dense vector embeddings with `Document`/`SearchQuery` prompts |
 | **Vector Store** | [ChromaDB](https://www.trychroma.com/) (`langchain-chroma`) | Persistent vector database (`./chroma_db`) |
 | **Scraper** | [curl-cffi](https://github.com/yifeikong/curl_cffi) & [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) | Browser TLS fingerprint impersonation & structured parsing |
 | **API Framework** | [FastAPI](https://fastapi.tiangolo.com/) & [Uvicorn](https://www.uvicorn.org/) | High-performance asynchronous REST API |
@@ -128,10 +128,7 @@ Instead of requiring users to supply static URLs or feeding raw HTML blobs into 
 
 1. **Python 3.13+** installed.
 2. **[Groq API Key](https://console.groq.com/)** added to `.env` (`GROQ_API_KEY="gsk_..."`).
-3. **[Ollama](https://ollama.com/)** running locally for vector embeddings:
-   ```bash
-   ollama pull nomic-embed-text
-   ```
+3. **[Hugging Face Token](https://huggingface.co/settings/tokens)** added to `.env` (`HF_TOKEN="hf_..."`).
 4. A **[LangSmith](https://smith.langchain.com/)** API key (optional, for tracing).
 
 ---
@@ -180,13 +177,13 @@ Configure your `.env` variables:
 GROQ_API_KEY="gsk_your_groq_api_key_here"
 GROQ_MODEL="openai/gpt-oss-120b"
 
-# Ollama Endpoint (Used for vector embeddings)
-OLLAMA_BASE_URL="http://localhost:11434"
+# Hugging Face Token (Used for google/embeddinggemma-2 embeddings)
+HF_TOKEN="hf_your_huggingface_token_here"
 
 # LangSmith Tracing (Optional)
 LANGCHAIN_TRACING_V2="true"
 LANGCHAIN_API_KEY="lsv2_pt_your_api_key_here"
-LANGCHAIN_PROJECT="GenAI_WebScraper_Ollama"
+LANGCHAIN_PROJECT="web-scraper-ai"
 LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
 ```
 
@@ -316,7 +313,7 @@ Accepts a natural language task across all registered tools (`search_amazon`, `s
 ---
 
 ### 3. Scrape & Ingestion Pipeline (`POST /api/scrape`)
-Executes the isolated Ingestion pipeline: fetches a webpage, cleans HTML, splits into chunks, embeds with `nomic-embed-text`, and stores in ChromaDB.
+Executes the isolated Ingestion pipeline: fetches a webpage, cleans HTML, splits into chunks, embeds with `google/embeddinggemma-2` via `sentence-transformers`, and stores in ChromaDB.
 
 - **Request Body**:
   ```json
@@ -374,18 +371,19 @@ Executes the isolated QA pipeline against already indexed ChromaDB vectors.
 ---
 
 ### 5. Health Status (`GET /health`)
-Checks connectivity to Groq, Ollama, and LangSmith.
+Checks connectivity to Groq, SentenceTransformers (`google/embeddinggemma-2`), and LangSmith.
 
 - **Response (200 OK)**:
   ```json
   {
     "status": "healthy",
     "groq_service": "connected",
-    "ollama_service": "connected",
-    "embedding_model": "nomic-embed-text",
+    "embedding_service": "loaded (google/embeddinggemma-2)",
+    "ollama_service": "migrated to sentence-transformers (google/embeddinggemma-2)",
+    "embedding_model": "google/embeddinggemma-2",
     "llm_model": "openai/gpt-oss-120b",
     "langsmith_tracing": true,
-    "langsmith_project": "GenAI_WebScraper_Ollama"
+    "langsmith_project": "web-scraper-ai"
   }
   ```
 
@@ -436,8 +434,10 @@ web_scraper_ai/
 ├── agent_service.py      # Autonomous AI Agent Brain with Value Score engine
 ├── ingestion.py          # Decoupled Ingestion Pipeline (fetch -> chunk -> embed -> ChromaDB)
 ├── qa.py                 # Decoupled QA Pipeline (query -> ChromaDB -> Groq LLM)
-├── vector_store.py       # ChromaDB vector store manager & Ollama embeddings
+├── vector_store.py       # ChromaDB vector store manager & GemmaEmbeddings (SentenceTransformers)
 ├── main.py               # FastAPI application exposing /api/research & RAG endpoints
+├── static/               # Interactive Agent Telemetry UI (index.html, style.css, app.js)
+├── test_stream.py        # Streaming SSE test suite for live Agent Telemetry
 ├── test_research.py      # Automated tests for Value Score & /api/research
 ├── test_agent.py         # End-to-end integration tests for the AI Agent
 └── test_app.py           # Integration tests for Ingestion and QA pipelines

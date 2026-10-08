@@ -137,7 +137,8 @@ class QueryResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     groq_service: str
-    ollama_service: str
+    embedding_service: Optional[str] = "loaded (google/embeddinggemma-2)"
+    ollama_service: Optional[str] = "migrated to sentence-transformers (google/embeddinggemma-2)"
     embedding_model: str
     llm_model: str
     langsmith_tracing: bool
@@ -220,14 +221,16 @@ async def api_info():
 
 @app.get("/health", response_model=HealthResponse, response_class=JSONResponse)
 async def health_check():
-    # Check Ollama service (used for embeddings)
-    ollama_ok = False
+    # Check Embedding service (google/embeddinggemma-2 via sentence-transformers)
+    embed_ok = True
+    embed_status_str = "loaded (google/embeddinggemma-2)"
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get("http://localhost:11434/api/tags")
-            ollama_ok = resp.status_code == 200
-    except Exception:
-        ollama_ok = False
+        if not hasattr(vector_store_manager, "embeddings") or vector_store_manager.embeddings.model is None:
+            embed_ok = False
+            embed_status_str = "model not initialized"
+    except Exception as e:
+        embed_ok = False
+        embed_status_str = f"error ({str(e)})"
 
     # Check Groq API service
     groq_key = os.getenv("GROQ_API_KEY")
@@ -252,13 +255,14 @@ async def health_check():
     project_name = os.getenv("LANGCHAIN_PROJECT")
     current_llm_model = getattr(qa_service, "llm_model", os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"))
 
-    is_healthy = ollama_ok and groq_ok
+    is_healthy = embed_ok and groq_ok
 
     return HealthResponse(
         status="healthy" if is_healthy else "degraded",
         groq_service=groq_status_str,
-        ollama_service="connected" if ollama_ok else "unreachable (ensure Ollama is running for embeddings)",
-        embedding_model="nomic-embed-text",
+        embedding_service=embed_status_str,
+        ollama_service="migrated to sentence-transformers (google/embeddinggemma-2)",
+        embedding_model="google/embeddinggemma-2",
         llm_model=current_llm_model,
         langsmith_tracing=tracing_enabled,
         langsmith_project=project_name,

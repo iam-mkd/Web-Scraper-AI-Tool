@@ -59,6 +59,7 @@ def test_api():
     health_resp = client.get("/health")
     print(f"Health Response ({health_resp.status_code}): {health_resp.json()}")
     assert health_resp.status_code == 200
+    assert health_resp.json().get("embedding_model") == "google/embeddinggemma-2"
 
     # Test POST /api/scrape
     scrape_payload = {"url": "https://example.com", "force_refresh": True}
