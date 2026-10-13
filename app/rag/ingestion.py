@@ -2,8 +2,8 @@ from typing import Dict, Any, Optional
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
-from scraper import scrape_webpage
-from vector_store import get_vector_store_manager, VectorStoreManager
+from app.scrapers.base_scraper import scrape_webpage
+from app.rag.vector_store import get_vector_store_manager, VectorStoreManager
 
 
 class IngestionService:

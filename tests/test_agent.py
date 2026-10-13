@@ -1,16 +1,22 @@
+import os
+import sys
 import asyncio
 import json
-import sys
 from dotenv import load_dotenv
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 load_dotenv()
 
-from agent_service import get_agent_service
+from app.agent.service import get_agent_service
 from fastapi.testclient import TestClient
-from main import app
+from app.main import app
 
 
 async def test_agent_direct():
@@ -62,3 +68,4 @@ if __name__ == "__main__":
     asyncio.run(test_agent_direct())
     time.sleep(2.0)
     test_agent_api()
+

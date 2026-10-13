@@ -111,3 +111,4 @@ async def scrape_webpage(url: str, timeout: float = 25.0) -> Dict[str, Any]:
         "content": cleaned_text,
         "char_count": len(cleaned_text),
     }
+

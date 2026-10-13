@@ -398,25 +398,31 @@ Checks connectivity to Groq, SentenceTransformers (`google/embeddinggemma-2`), a
 
 ## 🧪 Running Automated Tests
 
-Run the comprehensive test suites:
+Run the comprehensive test suites from the project root:
 
-### 1. Test Structured Research & Value Score Engine (`test_research.py`):
+### 1. Test Agent Streaming & Web UI Telemetry (`tests/test_stream.py`):
 ```bash
-uv run python test_research.py
+uv run python tests/test_stream.py
 ```
-*Verifies typed `Product` model validation, `form_factor` (UDIMM vs SODIMM), `kit_size`, deterministic `value_score`, spec-aware filtering, and the `POST /api/research` endpoint.*
+*Verifies query intent analysis, consideration badges, static UI routes, and Server-Sent Events (SSE) streaming.*
 
-### 2. Test Agent Task Workflow (`test_agent.py`):
+### 2. Test Decoupled Ingestion & QA Pipelines (`tests/test_app.py`):
 ```bash
-uv run python test_agent.py
+uv run python tests/test_app.py
 ```
-*Verifies multi-turn tool calling, live Amazon scraping, and `POST /api/agent/task`.*
+*Verifies HTML scraping, chunking, embedding in ChromaDB with `google/embeddinggemma-2`, RAG retrieval, and FastAPI endpoints.*
 
-### 3. Test Decoupled Ingestion & QA Pipelines (`test_app.py`):
+### 3. Test Agent Task Workflow (`tests/test_agent.py`):
 ```bash
-uv run python test_app.py
+uv run python tests/test_agent.py
 ```
-*Verifies HTML scraping, chunking, embedding in ChromaDB, RAG retrieval, and FastAPI endpoints.*
+*Verifies single-turn tool calling, live Amazon scraping, deterministic stats, and `POST /api/agent/task`.*
+
+### 4. Test Autonomous Multi-Step Agent (`tests/test_multi_step_agent.py`):
+```bash
+uv run python tests/test_multi_step_agent.py
+```
+*Verifies multi-turn tool calling (`search_amazon` -> `get_product_details` -> `compare_products`) and `POST /api/research`.*
 
 ---
 
@@ -424,23 +430,38 @@ uv run python test_app.py
 
 ```text
 web_scraper_ai/
+├── .env                  # Local environment credentials & API keys
 ├── .env.example          # Environment variable template
 ├── .gitignore            # Git exclusion rules
 ├── pyproject.toml        # Dependencies and project specifications
 ├── README.md             # Comprehensive project documentation
-├── models.py             # Pydantic schemas (Product, ResearchRequest, ResearchResponse)
-├── scraper.py            # Anti-bot web scraper with TLS impersonation
-├── structured_scraper.py # Structured Amazon product parser with retry backoff
-├── agent_service.py      # Autonomous AI Agent Brain with Value Score engine
-├── ingestion.py          # Decoupled Ingestion Pipeline (fetch -> chunk -> embed -> ChromaDB)
-├── qa.py                 # Decoupled QA Pipeline (query -> ChromaDB -> Groq LLM)
-├── vector_store.py       # ChromaDB vector store manager & GemmaEmbeddings (SentenceTransformers)
-├── main.py               # FastAPI application exposing /api/research & RAG endpoints
-├── static/               # Interactive Agent Telemetry UI (index.html, style.css, app.js)
-├── test_stream.py        # Streaming SSE test suite for live Agent Telemetry
-├── test_research.py      # Automated tests for Value Score & /api/research
-├── test_agent.py         # End-to-end integration tests for the AI Agent
-└── test_app.py           # Integration tests for Ingestion and QA pipelines
+├── main.py               # Top-level application entrypoint (uvicorn main:app)
+│
+├── app/                  # Modular Application Package
+│   ├── __init__.py       # Package exports
+│   ├── main.py           # FastAPI application, routes, and SSE streaming
+│   ├── models.py         # Pydantic schemas (Product, ProductDetail, etc.)
+│   ├── agent/            # Autonomous Agent Brain
+│   │   ├── __init__.py
+│   │   └── service.py    # AgentService, value scoring, tools, & SSE stream
+│   ├── rag/              # RAG & Vector Database Pipeline
+│   │   ├── __init__.py
+│   │   ├── vector_store.py  # ChromaDB manager & GemmaEmbeddings
+│   │   ├── ingestion.py     # Document fetch -> chunk -> embed -> ChromaDB
+│   │   └── qa.py            # ChromaDB retrieval & Groq answer synthesis
+│   └── scrapers/         # Web Scraping & Anti-Bot Bypassing
+│       ├── __init__.py
+│       ├── base_scraper.py   # TLS anti-bot web scraper (curl-cffi)
+│       └── amazon_scraper.py # Structured Amazon search & details
+│
+├── static/               # Interactive Agent Telemetry UI (index.html, styles.css, app.js)
+│
+└── tests/                # Automated Test Suites
+    ├── __init__.py
+    ├── test_app.py       # Ingestion, RAG, and API tests
+    ├── test_stream.py    # Streaming SSE & UI telemetry tests
+    ├── test_agent.py     # Agent direct & API tests
+    └── test_multi_step_agent.py # Multi-step autonomous agent tests
 ```
 
 ---

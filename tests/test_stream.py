@@ -1,8 +1,16 @@
+import os
+import sys
 import asyncio
 import json
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from fastapi.testclient import TestClient
-from main import app
-from agent_service import get_agent_service, analyze_task_intent
+from app.main import app
+from app.agent.service import get_agent_service, analyze_task_intent
 
 client = TestClient(app)
 
@@ -116,8 +124,9 @@ def test_sse_endpoint_stream():
 
 if __name__ == "__main__":
     print("Starting Web UI and Trace Polish Verification...")
-    test_intent_analyzer();
+    test_intent_analyzer()
     test_static_routes()
     asyncio.run(test_stream_generator_mock())
     test_sse_endpoint_stream()
     print("\n[SUCCESS] All Web UI & Trace Polish tests completed successfully!")
+

@@ -1,16 +1,22 @@
 import sys
+import os
 import json
 import asyncio
 from dotenv import load_dotenv
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 load_dotenv()
 
-from agent_service import get_agent_service, get_product_details, compare_products, search_amazon
+from app.agent.service import get_agent_service, get_product_details, compare_products, search_amazon
 from fastapi.testclient import TestClient
-from main import app
+from app.main import app
 
 
 async def test_tools_directly():
@@ -98,5 +104,4 @@ if __name__ == "__main__":
     print("Pacing for Groq TPM rate limits (sleeping 10s)...")
     time.sleep(10.0)
     test_api_endpoints()
-
 

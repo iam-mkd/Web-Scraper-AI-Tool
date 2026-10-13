@@ -13,10 +13,10 @@ from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from langchain_groq import ChatGroq
 
-from structured_scraper import search_amazon_products, get_amazon_product_details
-from scraper import scrape_webpage
-from vector_store import get_vector_store_manager, VectorStoreManager
-from models import Product, ProductDetail
+from app.scrapers.amazon_scraper import search_amazon_products, get_amazon_product_details
+from app.scrapers.base_scraper import scrape_webpage
+from app.rag.vector_store import get_vector_store_manager, VectorStoreManager
+from app.models import Product, ProductDetail
 
 
 # ---------------------------------------------------------------------------

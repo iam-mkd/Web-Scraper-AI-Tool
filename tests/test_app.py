@@ -1,18 +1,24 @@
 import asyncio
 import os
 import shutil
+import sys
 from dotenv import load_dotenv
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 load_dotenv()
 
-from scraper import scrape_webpage
-from vector_store import VectorStoreManager
-from ingestion import IngestionService
-from qa import QAService
+from app.scrapers.base_scraper import scrape_webpage
+from app.rag.vector_store import VectorStoreManager
+from app.rag.ingestion import IngestionService
+from app.rag.qa import QAService
 from fastapi.testclient import TestClient
-from main import app
+from app.main import app
 
-TEST_DIR = "./test_chroma_db"
+TEST_DIR = os.path.join(PROJECT_ROOT, "test_chroma_db")
 TEST_COLL = "test_docs"
 
 
@@ -104,3 +110,4 @@ if __name__ == "__main__":
     finally:
         if os.path.exists(TEST_DIR):
             shutil.rmtree(TEST_DIR, ignore_errors=True)
+

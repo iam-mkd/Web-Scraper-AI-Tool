@@ -9,7 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_groq import ChatGroq
 
-from vector_store import get_vector_store_manager, VectorStoreManager
+from app.rag.vector_store import get_vector_store_manager, VectorStoreManager
 
 
 class QAService:
@@ -176,3 +176,4 @@ class QAService:
             "query": query,
             "model": self.llm_model,
         }
+

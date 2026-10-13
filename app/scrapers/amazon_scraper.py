@@ -3,8 +3,8 @@ import asyncio
 import urllib.parse
 from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
-from scraper import fetch_html
-from models import Product
+from app.scrapers.base_scraper import fetch_html
+from app.models import Product
 
 
 async def search_amazon_products(
@@ -354,5 +354,4 @@ async def get_amazon_product_details(
                 }
 
     return {"name": "Product Details Unavailable", "url": url}
-
 

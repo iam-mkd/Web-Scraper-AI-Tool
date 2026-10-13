@@ -19,6 +19,10 @@ from langchain_core.embeddings import Embeddings
 from langchain_chroma import Chroma
 from sentence_transformers import SentenceTransformer
 
+# Resolve root chroma_db directory robustly
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+DEFAULT_PERSIST_DIRECTORY = os.path.join(PROJECT_ROOT, "chroma_db")
+
 
 class GemmaEmbeddings(Embeddings):
     """
@@ -83,11 +87,11 @@ class VectorStoreManager:
 
     def __init__(
         self,
-        persist_directory: str = "./chroma_db",
+        persist_directory: Optional[str] = None,
         collection_name: str = "web_scraper_docs",
         embedding_model: str = "google/embeddinggemma-2",
     ):
-        self.persist_directory = persist_directory
+        self.persist_directory = persist_directory or DEFAULT_PERSIST_DIRECTORY
         self.collection_name = collection_name
         self.embedding_model = embedding_model
 
@@ -132,15 +136,17 @@ default_vector_store_manager = VectorStoreManager()
 
 
 def get_vector_store_manager(
-    persist_directory: str = "./chroma_db",
+    persist_directory: Optional[str] = None,
     collection_name: str = "web_scraper_docs",
 ) -> VectorStoreManager:
     """
     Returns a VectorStoreManager instance. If default params match, returns the shared instance.
     """
-    if persist_directory == "./chroma_db" and collection_name == "web_scraper_docs":
+    target_dir = persist_directory or DEFAULT_PERSIST_DIRECTORY
+    if target_dir == DEFAULT_PERSIST_DIRECTORY and collection_name == "web_scraper_docs":
         return default_vector_store_manager
     return VectorStoreManager(
-        persist_directory=persist_directory,
+        persist_directory=target_dir,
         collection_name=collection_name,
     )
+
