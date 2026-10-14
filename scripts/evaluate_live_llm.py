@@ -91,10 +91,13 @@ def save_current_report(results: List[GradeResult], output_md: str, output_json:
 
 async def run_live_evaluation():
     args = parse_args()
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GROQ_API_KEY")
-    if not api_key:
-        print("[ERROR] GEMINI_API_KEY or GOOGLE_API_KEY environment variable is not set. Please set it in .env.", flush=True)
-        sys.exit(1)
+    model_name = args.model or os.getenv("OLLAMA_MODEL") or os.getenv("GROQ_MODEL") or "qwen3.5:4b"
+    is_remote = "/" in model_name or "gpt" in model_name.lower() or "gemini" in model_name.lower()
+    if is_remote and "qwen" not in model_name.lower():
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GROQ_API_KEY")
+        if not api_key:
+            print("[ERROR] Remote API key (GROQ_API_KEY or GEMINI_API_KEY) is not set in .env.", flush=True)
+            sys.exit(1)
 
     cases_to_run = list(GOLDEN_EVAL_DATASET)
     if args.category:
@@ -110,7 +113,7 @@ async def run_live_evaluation():
 
     print("=" * 75, flush=True)
     print("LIVE LLM GOLDEN EVALUATION (MEASUREMENT ENGINE)", flush=True)
-    print(f"Model        : {args.model or os.getenv('GEMINI_MODEL') or os.getenv('GOOGLE_MODEL', 'gemini-3.8-flash')}", flush=True)
+    print(f"Model        : {model_name}", flush=True)
     print(f"Cases to run : {len(cases_to_run)} cases", flush=True)
     print(f"Pacing delay : {args.delay:.1f}s between tasks", flush=True)
     print(f"Report Path  : {args.output}", flush=True)

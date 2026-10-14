@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-10-14 15:44:40",
-  "total_cases": 10,
-  "passed_cases": 8,
-  "failed_cases": 2,
+  "timestamp": "2026-10-14 18:38:46",
+  "total_cases": 15,
+  "passed_cases": 12,
+  "failed_cases": 3,
   "overall_accuracy": 0.8,
   "failure_rate": 0.2,
-  "avg_latency_ms": 3352.016220000587,
+  "avg_latency_ms": 14917.877346667228,
   "grounding_avg_score": 1.0,
   "category_metrics": {
     "intent_extraction": {
@@ -16,9 +16,16 @@
       "avg_score": 1.0
     },
     "tool_selection": {
-      "total": 2,
-      "passed": 0,
+      "total": 6,
+      "passed": 4,
       "failed": 2,
+      "accuracy": 0.6666666666666666,
+      "avg_score": 0.7777777777777778
+    },
+    "product_ranking": {
+      "total": 1,
+      "passed": 0,
+      "failed": 1,
       "accuracy": 0.0,
       "avg_score": 0.0
     }
@@ -30,7 +37,7 @@
       "task": "Find me the best DDR5 RAM deal on Amazon under 10000",
       "passed": true,
       "score": 1.0,
-      "latency_ms": 1.934599997184705,
+      "latency_ms": 1.2560999966808595,
       "error": null,
       "checks": [
         {
@@ -61,7 +68,7 @@
       "task": "I need 32GB laptop DDR5 memory",
       "passed": true,
       "score": 1.0,
-      "latency_ms": 0.9298000004491769,
+      "latency_ms": 0.8245000062743202,
       "error": null,
       "checks": [
         {
@@ -97,7 +104,7 @@
       "task": "What's the cheapest DDR5 RAM available for my desktop?",
       "passed": true,
       "score": 1.0,
-      "latency_ms": 1.520500001788605,
+      "latency_ms": 1.5849999981583096,
       "error": null,
       "checks": [
         {
@@ -128,7 +135,7 @@
       "task": "I don't care about the price, give me the fastest DDR5 kit for overclocking",
       "passed": true,
       "score": 1.0,
-      "latency_ms": 0.7958000023791101,
+      "latency_ms": 0.7464000009349547,
       "error": null,
       "checks": [
         {
@@ -159,7 +166,7 @@
       "task": "Top rated 16GB desktop RAM below 5000",
       "passed": true,
       "score": 1.0,
-      "latency_ms": 0.9011000001919456,
+      "latency_ms": 0.9638999981689267,
       "error": null,
       "checks": [
         {
@@ -195,7 +202,7 @@
       "task": "Find SODIMM DDR5 for my notebook below 8000",
       "passed": true,
       "score": 1.0,
-      "latency_ms": 0.7459000007656869,
+      "latency_ms": 0.8970999988378026,
       "error": null,
       "checks": [
         {
@@ -226,7 +233,7 @@
       "task": "Recommend the most reliable DDR5 RAM kit for a workstation PC",
       "passed": true,
       "score": 1.0,
-      "latency_ms": 0.9454999999434222,
+      "latency_ms": 0.9913000030792318,
       "error": null,
       "checks": [
         {
@@ -257,7 +264,7 @@
       "task": "Find fastest DDR5 RAM under 50k for my gaming rig",
       "passed": true,
       "score": 1.0,
-      "latency_ms": 0.7891999994171783,
+      "latency_ms": 0.847700001031626,
       "error": null,
       "checks": [
         {
@@ -286,20 +293,181 @@
       "case_id": "tool_01",
       "category": "tool_selection",
       "task": "Search Amazon India for DDR5 6000MHz memory kits under 12000",
-      "passed": false,
-      "score": 0.0,
-      "latency_ms": 27196.634100000665,
-      "error": "Error code: 429 - {'error': {'message': \"Request too large for model `qwen/qwen3.8-27b` in organization `org_01m418d0b2eyzveq061td61ngm` service tier `on_demand` on output tokens per minute (OTPM): Limit 1000, Requested 1080. The request's expected output tokens exceed the enforced limit; reduce max_tokens (or the request's expected output) and try again. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\", 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
-      "checks": []
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 4491.988800000399,
+      "error": null,
+      "checks": [
+        {
+          "name": "permitted_tools",
+          "passed": true,
+          "details": "Tools called ['search_amazon', 'search_amazon'] are permitted"
+        },
+        {
+          "name": "forbidden_tool_scrape_url",
+          "passed": true,
+          "details": "Forbidden tool 'scrape_url' correctly avoided"
+        },
+        {
+          "name": "forbidden_tool_search_rag",
+          "passed": true,
+          "details": "Forbidden tool 'search_rag' correctly avoided"
+        },
+        {
+          "name": "tool_arg_query",
+          "passed": true,
+          "details": "Argument 'query': expected='DDR5 6000MHz', got='DDR5 6000MHz memory kit'"
+        },
+        {
+          "name": "tool_arg_max_price",
+          "passed": true,
+          "details": "Argument 'max_price': expected=12000.0, got=12000"
+        }
+      ]
     },
     {
       "case_id": "tool_02",
       "category": "tool_selection",
       "task": "Inspect the operating voltage and timings of Corsair Vengeance DDR5 from Amazon: https://www.amazon.in/CORSAIR-Vengeance-5200MHz-CL40-40-40-77-Computer/dp/B0DM2PGP4N/ref=sr_1_3?sr=8-3",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 36499.66609999683,
+      "error": null,
+      "checks": [
+        {
+          "name": "permitted_tools",
+          "passed": true,
+          "details": "Tools called ['get_product_details', 'scrape_url', 'search_amazon'] are permitted"
+        },
+        {
+          "name": "forbidden_tool_extract_information",
+          "passed": true,
+          "details": "Forbidden tool 'extract_information' correctly avoided"
+        },
+        {
+          "name": "tool_arg_url",
+          "passed": true,
+          "details": "Argument 'url': expected='https://www.amazon.in/CORSAIR-Vengeance-5200MHz-CL40-40-40-77-Computer/dp/B0DM2PGP4N/ref=sr_1_3?sr=8-3', got='https://www.amazon.in/CORSAIR-Vengeance-5200MHz-CL40-40-40-77-Computer/dp/B0DM2PGP4N/ref=sr_1_3?sr=8-3'"
+        }
+      ]
+    },
+    {
+      "case_id": "tool_03",
+      "category": "tool_selection",
+      "task": "Compare Corsair Vengeance and G.Skill Trident Z5 side by side",
       "passed": false,
       "score": 0.0,
-      "latency_ms": 6314.965700003086,
-      "error": "Error code: 429 - {'error': {'message': \"Request too large for model `qwen/qwen3.8-27b` in organization `org_01m418d0b2eyzveq061td61ngm` service tier `on_demand` on output tokens per minute (OTPM): Limit 1000, Requested 1089. The request's expected output tokens exceed the enforced limit; reduce max_tokens (or the request's expected output) and try again. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\", 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
+      "latency_ms": 58524.67959999922,
+      "error": null,
+      "checks": [
+        {
+          "name": "permitted_tools",
+          "passed": false,
+          "details": "Tools called ['search_amazon', 'search_amazon', 'scrape_url'] contain unpermitted tool"
+        },
+        {
+          "name": "forbidden_tool_scrape_url",
+          "passed": false,
+          "details": "Forbidden tool 'scrape_url' unexpectedly called"
+        },
+        {
+          "name": "tool_arg_product_urls",
+          "passed": false,
+          "details": "Argument 'product_urls': expected=['https://www.amazon.in/CORSAIR-Vengeance-5200MHz-CL40-40-40-77-Computer/dp/B0DM2PGP4N/ref=sr_1_3?sr=8-3', 'https://www.amazon.in/G-Skill-Trident-CL36-36-36-96-Desktop-Memory/dp/B09TPY273P/ref=sr_1_1?sr=8-1'], got=None"
+        }
+      ]
+    },
+    {
+      "case_id": "tool_04",
+      "category": "tool_selection",
+      "task": "Scrape the hardware specification article at https://en.wikipedia.org/wiki/DDR5_SDRAM",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 29406.844700002694,
+      "error": null,
+      "checks": [
+        {
+          "name": "permitted_tools",
+          "passed": true,
+          "details": "Tools called ['scrape_url', 'scrape_url'] are permitted"
+        },
+        {
+          "name": "forbidden_tool_search_amazon",
+          "passed": true,
+          "details": "Forbidden tool 'search_amazon' correctly avoided"
+        },
+        {
+          "name": "tool_arg_url",
+          "passed": true,
+          "details": "Argument 'url': expected='https://en.wikipedia.org/wiki/DDR5_SDRAM', got='https://en.wikipedia.org/wiki/DDR5_SDRAM'"
+        }
+      ]
+    },
+    {
+      "case_id": "tool_05",
+      "category": "tool_selection",
+      "task": "Find 64GB DDR5 memory modules for server virtualization",
+      "passed": false,
+      "score": 0.6666666666666666,
+      "latency_ms": 37546.64269999921,
+      "error": null,
+      "checks": [
+        {
+          "name": "permitted_tools",
+          "passed": true,
+          "details": "Tools called ['search_amazon', 'search_amazon'] are permitted"
+        },
+        {
+          "name": "tool_arg_query",
+          "passed": false,
+          "details": "Argument 'query': expected='64GB DDR5 RAM', got='DDR5 64GB UDIMM ECC'"
+        },
+        {
+          "name": "tool_arg_capacity_gb",
+          "passed": true,
+          "details": "Argument 'capacity_gb': expected=64, got=64"
+        }
+      ]
+    },
+    {
+      "case_id": "tool_06",
+      "category": "tool_selection",
+      "task": "Search for SODIMM laptop RAM kits under 9000",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 36742.34880000586,
+      "error": null,
+      "checks": [
+        {
+          "name": "permitted_tools",
+          "passed": true,
+          "details": "Tools called ['search_amazon', 'search_amazon', 'get_product_details'] are permitted"
+        },
+        {
+          "name": "tool_arg_query",
+          "passed": true,
+          "details": "Argument 'query': expected='SODIMM laptop RAM', got='SODIMM laptop RAM kit'"
+        },
+        {
+          "name": "tool_arg_form_factor",
+          "passed": true,
+          "details": "Argument 'form_factor': expected='SODIMM', got='SODIMM'"
+        },
+        {
+          "name": "tool_arg_max_price",
+          "passed": true,
+          "details": "Argument 'max_price': expected=9000.0, got=9000"
+        }
+      ]
+    },
+    {
+      "case_id": "rank_01",
+      "category": "product_ranking",
+      "task": "Find DDR5 RAM under 10000 and confirm all results respect the budget",
+      "passed": false,
+      "score": 0.0,
+      "latency_ms": 20547.87750000105,
+      "error": "Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01m418d0b2eyzveq061td61ngm` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199567, Requested 1924. Please try again in 10m44.112s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
       "checks": []
     }
   ]

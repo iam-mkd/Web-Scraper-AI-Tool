@@ -14,6 +14,7 @@ from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from langchain_groq import ChatGroq
 from langchain_google_genai import GoogleGenerativeAI
+from langchain_ollama import ChatOllama
 
 from app.scrapers.amazon_scraper import search_amazon_products, get_amazon_product_details
 from app.scrapers.base_scraper import scrape_webpage
@@ -486,7 +487,7 @@ async def get_product_details(url: str) -> str:
 # Tool 3: compare_products (Deterministic Side-by-Side Product Comparison)
 # ---------------------------------------------------------------------------
 @tool
-async def compare_products(product_urls: Optional[List[str]] = None) -> str:
+async def compare_products(product_urls: Optional[Any] = None) -> str:
     """
     Compares 2 to 4 products side-by-side deterministically based on hardware specs,
     price, capacity, speed, latency, voltage, value score, and warranty.
@@ -494,8 +495,21 @@ async def compare_products(product_urls: Optional[List[str]] = None) -> str:
     """
     products_to_compare: List[Dict[str, Any]] = []
 
-    if product_urls:
-        for u in product_urls:
+    # Robust handling for varied model argument formats (list, dict with urls, single str)
+    parsed_urls: List[str] = []
+    if isinstance(product_urls, list):
+        parsed_urls = [str(u) for u in product_urls if u]
+    elif isinstance(product_urls, dict):
+        raw_val = product_urls.get("urls") or product_urls.get("product_urls") or list(product_urls.values())
+        if isinstance(raw_val, list):
+            parsed_urls = [str(u) for u in raw_val if u]
+        elif isinstance(raw_val, str):
+            parsed_urls = [raw_val]
+    elif isinstance(product_urls, str):
+        parsed_urls = [product_urls]
+
+    if parsed_urls:
+        for u in parsed_urls:
             if u in _PRODUCTS_CACHE:
                 products_to_compare.append(_PRODUCTS_CACHE[u])
             else:
@@ -809,9 +823,9 @@ class AgentService:
     ):
         self.llm_model = (
             llm_model
+            or os.getenv("OLLAMA_MODEL")
             or os.getenv("GROQ_MODEL")
-            or os.getenv("GOOGLE_MODEL")
-            or "openai/gpt-oss-20b"
+            or "qwen3.5:4b"
         )
         self.temperature = temperature
         self._llm = llm
@@ -829,12 +843,28 @@ class AgentService:
         self.tools_by_name = {t.name: t for t in self.tools}
 
     def get_llm(self) -> Any:
-        """Lazily initialize ChatGroq bound with tools or return injected LLM."""
+        """Lazily initialize ChatOllama bound with tools or return injected LLM."""
         if self._llm is not None:
             return self._llm
 
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        model_name = self.llm_model.lower()
+
+        # 1. Primary: If model is Ollama (e.g. qwen3.5:4b, or not explicitly Groq/Gemini)
+        is_groq = "/" in self.llm_model or "gpt" in model_name or "llama" in model_name and "ollama" not in model_name
+        is_gemini = "gemini" in model_name
+
+        if not is_groq and not is_gemini or "qwen" in model_name:
+            self._llm = ChatOllama(
+                model=self.llm_model,
+                temperature=self.temperature,
+                base_url=ollama_base_url,
+            )
+            return self._llm
+
+        # 2. Fallback to Groq if Groq API key is present and model is a Groq model
         groq_api_key = os.getenv("GROQ_API_KEY")
-        if groq_api_key and "gemini" not in self.llm_model.lower():
+        if groq_api_key and not is_gemini:
             self._llm = ChatGroq(
                 model=self.llm_model,
                 temperature=self.temperature,
@@ -843,9 +873,9 @@ class AgentService:
             )
             return self._llm
 
-        # Fallback to Google GenAI if model is Gemini and Gemini API key is present
+        # 3. Fallback to Google GenAI if model is Gemini and Gemini API key is present
         google_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if google_api_key and "gemini" in self.llm_model.lower():
+        if google_api_key and is_gemini:
             self._llm = GoogleGenerativeAI(
                 model=self.llm_model,
                 temperature=self.temperature,
@@ -854,10 +884,13 @@ class AgentService:
             )
             return self._llm
 
-        raise ValueError(
-            "GROQ_API_KEY environment variable is not set. "
-            "Please add GROQ_API_KEY to your .env file."
+        # Default fallback to ChatOllama
+        self._llm = ChatOllama(
+            model=self.llm_model,
+            temperature=self.temperature,
+            base_url=ollama_base_url,
         )
+        return self._llm
 
     async def run_task(self, task: str, max_steps: int = 6) -> Dict[str, Any]:
         """
@@ -1045,7 +1078,10 @@ class AgentService:
 
                 selected_tool = self.tools_by_name.get(tool_name)
                 if selected_tool:
-                    tool_output_str = await selected_tool.ainvoke(tool_args)
+                    try:
+                        tool_output_str = await selected_tool.ainvoke(tool_args)
+                    except Exception as tool_exec_err:
+                        tool_output_str = json.dumps({"status": "error", "message": f"Tool execution error: {str(tool_exec_err)}"})
                     try:
                         parsed_out = json.loads(tool_output_str)
                     except Exception:
@@ -1456,7 +1492,10 @@ class AgentService:
 
                     selected_tool = self.tools_by_name.get(tool_name)
                     if selected_tool:
-                        tool_output_str = await selected_tool.ainvoke(tool_args)
+                        try:
+                            tool_output_str = await selected_tool.ainvoke(tool_args)
+                        except Exception as tool_exec_err:
+                            tool_output_str = json.dumps({"status": "error", "message": f"Tool execution error: {str(tool_exec_err)}"})
                         duration_s = round(time.time() - start_t, 2)
 
                         try:

@@ -8,6 +8,7 @@ load_dotenv()
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_groq import ChatGroq
+from langchain_ollama import ChatOllama
 
 from app.rag.vector_store import get_vector_store_manager, VectorStoreManager
 
@@ -15,7 +16,7 @@ from app.rag.vector_store import get_vector_store_manager, VectorStoreManager
 class QAService:
     """
     Question Answering Pipeline:
-    embed question -> chroma db -> top k chunks -> Groq LLM -> answer
+    embed question -> chroma db -> top k chunks -> Ollama / Groq LLM -> answer
     """
 
     def __init__(
@@ -25,9 +26,9 @@ class QAService:
         temperature: float = 0.1,
     ):
         self.vector_store_manager = vector_store_manager or get_vector_store_manager()
-        self.llm_model = llm_model or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+        self.llm_model = llm_model or os.getenv("OLLAMA_MODEL") or os.getenv("GROQ_MODEL", "qwen3.5:4b")
         self.temperature = temperature
-        self._llm: Optional[ChatGroq] = None
+        self._llm: Optional[Any] = None
 
         # RAG Prompt Template
         self.prompt = ChatPromptTemplate.from_messages([
@@ -50,20 +51,36 @@ class QAService:
             ("human", "{question}"),
         ])
 
-    def get_llm(self) -> ChatGroq:
-        """Lazily initialize ChatGroq to ensure GROQ_API_KEY is present and hot-reloadable."""
-        groq_api_key = os.getenv("GROQ_API_KEY")
-        if not groq_api_key:
-            raise ValueError(
-                "GROQ_API_KEY environment variable is not set. "
-                "Please add and save GROQ_API_KEY in your .env file."
+    def get_llm(self) -> Any:
+        """Lazily initialize ChatOllama or ChatGroq."""
+        if self._llm is not None:
+            return self._llm
+
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        is_groq = "/" in self.llm_model and "openai" in self.llm_model.lower()
+
+        if not is_groq or "qwen" in self.llm_model.lower():
+            self._llm = ChatOllama(
+                model=self.llm_model,
+                temperature=self.temperature,
+                base_url=ollama_base_url,
             )
-        if self._llm is None:
+            return self._llm
+
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if groq_api_key:
             self._llm = ChatGroq(
                 model=self.llm_model,
                 temperature=self.temperature,
                 api_key=groq_api_key,
             )
+            return self._llm
+
+        self._llm = ChatOllama(
+            model=self.llm_model,
+            temperature=self.temperature,
+            base_url=ollama_base_url,
+        )
         return self._llm
 
     def get_chain(self):

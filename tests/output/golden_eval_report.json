@@ -4,7 +4,7 @@
   "failed_cases": 0,
   "overall_accuracy": 1.0,
   "failure_rate": 0.0,
-  "avg_latency_ms": 3.425990000020344,
+  "avg_latency_ms": 2.85716333334373,
   "grounding_avg_score": 1.0,
   "category_metrics": {
     "intent_extraction": {
@@ -43,5 +43,5 @@
       "avg_score": 1.0
     }
   },
-  "timestamp": "2026-10-14 13:31:27"
+  "timestamp": "2026-10-14 18:40:51"
 }
