@@ -1,62 +1,67 @@
 import os
-import sys
-import asyncio
 import json
-from dotenv import load_dotenv
-
-# Ensure project root is in sys.path
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
-
-load_dotenv()
-
-from app.agent.service import get_agent_service
+import pytest
+from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
+
 from app.main import app
+from app.agent.service import (
+    search_amazon,
+    search_web,
+    calculate_value_score,
+    AgentService,
+)
+from tests.conftest import MockChatGroq, MOCK_AMAZON_SEARCH_HTML, FIXED_PRODUCTS_DATASET
 
 
+@pytest.mark.asyncio
 async def test_agent_direct():
-    print("=== Testing AgentService directly ===")
-    agent = get_agent_service()
-    task = "Find me DDR5 RAM deals on Amazon under 50000"
-    print(f"Task: {task}")
-    
-    result = await agent.run_task(task)
-    print("\n--- Agent Execution Output ---")
-    print(f"Tool Called: {result.get('tool_called')}")
-    print(f"Tool Arguments: {json.dumps(result.get('tool_arguments'), indent=2)}")
-    print(f"Deterministic Stats: {json.dumps(result.get('stats'), indent=2)}")
-    print(f"Matching Products Found: {len(result.get('products', []))}")
-    if result.get("products"):
-        print(f"Sample Product: {json.dumps(result['products'][0], indent=2)}")
-    print("\n--- LLM Explanation ---")
-    print(result.get("explanation"))
-    
-    assert result.get("tool_called") in ("search_web", "search_amazon"), f"Unexpected tool: {result.get('tool_called')}"
-    assert len(result.get("products", [])) > 0, "Expected at least 1 matching product"
-    assert "cheapest_product" in (result.get("stats") or {}), "Expected cheapest_product in stats"
-    print("\n>>> Direct Agent Service Test Passed! <<<\n")
+    print("\n=== 1. Testing Search Tool Logic Directly ===")
+    mock_products = list(FIXED_PRODUCTS_DATASET)
+
+    with patch("app.scrapers.amazon_scraper.fetch_html", return_value=MOCK_AMAZON_SEARCH_HTML):
+        result_str = await search_amazon.ainvoke({"query": "DDR5 RAM", "max_price": 50000.0})
+        result = json.loads(result_str)
+
+    assert result["status"] == "success"
+    assert "cheapest_product" in result["stats"]
+    assert "best_value_product" in result["stats"]
+    assert len(result["products"]) > 0
+
+    best_val = result["stats"]["best_value_product"]
+    print(f"Top Recommended Value RAM: {best_val['name']}")
+    print(f"Value Score: {best_val['value_score']}/100 | Price: ₹{best_val['price']}")
 
 
 def test_agent_api():
-    print("=== Testing /api/agent/task API endpoint ===")
+    print("\n=== 2. Testing FastAPI Agent Endpoint (Mock) ===")
     client = TestClient(app)
-    payload = {"task": "Find me DDR5 RAM deals on Amazon under 50000"}
-    
-    response = client.post("/api/agent/task", json=payload)
-    print(f"Status Code: {response.status_code}")
+    payload = {"task": "Find me the best DDR5 RAM deal on Amazon under 50000"}
+
+    tool_call = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "search_amazon",
+                "args": {"query": "DDR5 RAM", "max_price": 50000.0},
+                "id": "api_call_1",
+            }
+        ],
+    )
+    final_synth = AIMessage(
+        content="API recommendation: Corsair Vengeance 32GB DDR5.",
+        tool_calls=[],
+    )
+    mock_llm = MockChatGroq([tool_call, final_synth])
+    mock_agent = AgentService(llm=mock_llm)
+
+    with patch("app.main.agent_service", mock_agent), \
+         patch("app.scrapers.amazon_scraper.fetch_html", return_value=MOCK_AMAZON_SEARCH_HTML):
+        response = client.post("/api/agent/task", json=payload)
+
     assert response.status_code == 200, f"API error: {response.text}"
-    
     data = response.json()
-    print(f"Response Task: {data.get('task')}")
-    print(f"Tool Called: {data.get('tool_called')}")
-    print(f"Products Count: {len(data.get('products', []))}")
-    print(f"Explanation (preview): {data.get('explanation')[:300]}...")
-    
     assert data.get("tool_called") in ("search_web", "search_amazon")
     assert len(data.get("products", [])) > 0
     assert data.get("explanation")
@@ -64,8 +69,6 @@ def test_agent_api():
 
 
 if __name__ == "__main__":
-    import time
+    import asyncio
     asyncio.run(test_agent_direct())
-    time.sleep(2.0)
     test_agent_api()
-

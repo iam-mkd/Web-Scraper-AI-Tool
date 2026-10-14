@@ -28,6 +28,7 @@ class GemmaEmbeddings(Embeddings):
     """
     LangChain Embeddings implementation using SentenceTransformer and google/embeddinggemma-2.
     Embeds documents with prompt_name='Document' and queries with prompt_name='SearchQuery'.
+    SentenceTransformer model is lazily loaded on first embedding request.
     """
     _model_cache: Dict[str, SentenceTransformer] = {}
 
@@ -42,15 +43,20 @@ class GemmaEmbeddings(Embeddings):
         self.device = device
         self.query_prompt_name = query_prompt_name
         self.doc_prompt_name = doc_prompt_name
+        self._model: Optional[SentenceTransformer] = None
 
-        if self.model_name not in self._model_cache:
-            token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN")
-            self._model_cache[self.model_name] = SentenceTransformer(
-                self.model_name,
-                device=self.device,
-                token=token,
-            )
-        self.model = self._model_cache[self.model_name]
+    @property
+    def model(self) -> SentenceTransformer:
+        if self._model is None:
+            if self.model_name not in self._model_cache:
+                token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+                self._model_cache[self.model_name] = SentenceTransformer(
+                    self.model_name,
+                    device=self.device,
+                    token=token,
+                )
+            self._model = self._model_cache[self.model_name]
+        return self._model
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         if not texts:
@@ -90,20 +96,23 @@ class VectorStoreManager:
         persist_directory: Optional[str] = None,
         collection_name: str = "web_scraper_docs",
         embedding_model: str = "google/embeddinggemma-2",
+        embeddings: Optional[Embeddings] = None,
     ):
         self.persist_directory = persist_directory or DEFAULT_PERSIST_DIRECTORY
         self.collection_name = collection_name
         self.embedding_model = embedding_model
+        self.embeddings = embeddings or GemmaEmbeddings(model_name=self.embedding_model)
+        self._vector_store: Optional[Chroma] = None
 
-        # Initialize Gemma SentenceTransformer embeddings
-        self.embeddings = GemmaEmbeddings(model_name=self.embedding_model)
-
-        # Initialize ChromaDB persistent vector store
-        self.vector_store = Chroma(
-            collection_name=self.collection_name,
-            embedding_function=self.embeddings,
-            persist_directory=self.persist_directory,
-        )
+    @property
+    def vector_store(self) -> Chroma:
+        if self._vector_store is None:
+            self._vector_store = Chroma(
+                collection_name=self.collection_name,
+                embedding_function=self.embeddings,
+                persist_directory=self.persist_directory,
+            )
+        return self._vector_store
 
     def is_url_indexed(self, url: str) -> bool:
         """Check if any chunks for this URL exist in ChromaDB."""
@@ -131,22 +140,29 @@ class VectorStoreManager:
             print(f"Warning: Error while deleting chunks for {url}: {e}")
 
 
-# Default shared vector store manager instance
-default_vector_store_manager = VectorStoreManager()
+# Default shared vector store manager instance (lazy)
+_default_vector_store_manager: Optional[VectorStoreManager] = None
 
 
 def get_vector_store_manager(
     persist_directory: Optional[str] = None,
     collection_name: str = "web_scraper_docs",
+    embeddings: Optional[Embeddings] = None,
 ) -> VectorStoreManager:
     """
     Returns a VectorStoreManager instance. If default params match, returns the shared instance.
     """
+    global _default_vector_store_manager
     target_dir = persist_directory or DEFAULT_PERSIST_DIRECTORY
-    if target_dir == DEFAULT_PERSIST_DIRECTORY and collection_name == "web_scraper_docs":
-        return default_vector_store_manager
+    if target_dir == DEFAULT_PERSIST_DIRECTORY and collection_name == "web_scraper_docs" and embeddings is None:
+        if _default_vector_store_manager is None:
+            _default_vector_store_manager = VectorStoreManager(
+                persist_directory=target_dir,
+                collection_name=collection_name,
+            )
+        return _default_vector_store_manager
     return VectorStoreManager(
         persist_directory=target_dir,
         collection_name=collection_name,
+        embeddings=embeddings,
     )
-

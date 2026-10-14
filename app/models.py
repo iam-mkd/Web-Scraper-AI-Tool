@@ -4,8 +4,8 @@ from pydantic import BaseModel, Field
 
 class Product(BaseModel):
     name: str
-    price: float
-    capacity_gb: int
+    price: Optional[float] = None
+    capacity_gb: Optional[int] = None
     speed_mhz: Optional[int] = None
     cl_latency: Optional[int] = None
     rating: Optional[float] = None
@@ -79,4 +79,3 @@ class AgentTaskResponse(BaseModel):
     comparison: Optional[Dict[str, Any]] = None
     explanation: str
     model: str
-

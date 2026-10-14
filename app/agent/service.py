@@ -3,7 +3,8 @@ import re
 import json
 import math
 import time
-from typing import Dict, Any, List, Optional, AsyncGenerator
+import asyncio
+from typing import Dict, Any, List, Optional, Set, AsyncGenerator
 from dotenv import load_dotenv
 
 # Ensure environment variables are loaded
@@ -12,6 +13,7 @@ load_dotenv()
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from langchain_groq import ChatGroq
+from langchain_google_genai import GoogleGenerativeAI
 
 from app.scrapers.amazon_scraper import search_amazon_products, get_amazon_product_details
 from app.scrapers.base_scraper import scrape_webpage
@@ -36,6 +38,36 @@ def register_product_in_cache(product: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Retry Guidance Helper
+# ---------------------------------------------------------------------------
+def extract_retry_after(error: Exception, default_wait: float = 2.0, max_backoff: float = 10.0) -> float:
+    """
+    Extracts retry guidance (retry-after seconds) from HTTP response headers
+    or Groq 429 error messages (e.g. 'try again in 2.5s').
+    Falls back to bounded backoff.
+    """
+    response = getattr(error, "response", None)
+    if response is not None:
+        headers = getattr(response, "headers", {})
+        retry_header = headers.get("retry-after") or headers.get("Retry-After")
+        if retry_header:
+            try:
+                return min(max(float(retry_header), 0.1), max_backoff)
+            except ValueError:
+                pass
+
+    err_msg = str(error)
+    m = re.search(r'(?:try again in|retry after|wait)\s*([0-9]+(?:\.[0-9]+)?)\s*s', err_msg, re.IGNORECASE)
+    if m:
+        try:
+            return min(max(float(m.group(1)), 0.1), max_backoff)
+        except ValueError:
+            pass
+
+    return min(default_wait, max_backoff)
+
+
+# ---------------------------------------------------------------------------
 # Deterministic Value Score & Comparison Engine
 # ---------------------------------------------------------------------------
 def calculate_value_score(
@@ -44,12 +76,16 @@ def calculate_value_score(
     cl_latency: Optional[int],
     rating: Optional[float],
     review_count: Optional[int],
-    price: float,
-) -> float:
+    price: Optional[float],
+) ->Optional[float]:
     """
     Computes a deterministic Value Score (0.0 - 100.0) based on:
     Value Score = Performance (MHz + CL) + Capacity + Rating + Review Confidence - Price Penalty (INR/GB)
+    If price is None or <= 0, returns None to avoid inventing prices.
     """
+    if price is None or price <= 0:
+        return None
+
     # 1. Capacity Factor (max 30 pts):
     cap_score = min(30.0, (capacity_gb / 32.0) * 28.0)
 
@@ -80,12 +116,13 @@ def build_product_comparison(products: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Deterministically compiles a side-by-side comparison matrix with pros, cons,
     and clear verdicts (best_value, best_performance, budget_pick).
+    Safely handles unpriced items without inventing prices or crashing.
     """
     comparison_items: List[Dict[str, Any]] = []
 
     for p in products:
         name = p.get("name", "Unknown Product")
-        price = p.get("price") or 0.0
+        price = p.get("price")
         cap = p.get("capacity_gb") or 16
         speed = p.get("speed_mhz")
         cl = p.get("cl_latency")
@@ -95,7 +132,7 @@ def build_product_comparison(products: List[Dict[str, Any]]) -> Dict[str, Any]:
         kit_size = p.get("kit_size") or f"1x{cap}GB"
 
         val_score = p.get("value_score")
-        if val_score is None:
+        if val_score is None and price is not None and price > 0:
             val_score = calculate_value_score(
                 capacity_gb=cap,
                 speed_mhz=speed,
@@ -105,10 +142,18 @@ def build_product_comparison(products: List[Dict[str, Any]]) -> Dict[str, Any]:
                 price=price,
             )
 
-        price_per_gb = round(price / max(cap, 1), 1)
-
         pros: List[str] = []
         cons: List[str] = []
+
+        if price is not None and price > 0:
+            price_per_gb: Optional[float] = round(price / max(cap, 1), 1)
+            if price_per_gb < 1500:
+                pros.append(f"High price efficiency (₹{price_per_gb}/GB)")
+            elif price_per_gb > 2000:
+                cons.append(f"Premium cost per GB (₹{price_per_gb}/GB)")
+        else:
+            price_per_gb = None
+            cons.append("Price unavailable / out of stock")
 
         # Performance assessment
         if speed and speed >= 6000:
@@ -128,13 +173,7 @@ def build_product_comparison(products: List[Dict[str, Any]]) -> Dict[str, Any]:
         elif cap <= 8:
             cons.append("Limited 8GB capacity for modern DDR5 workloads")
 
-        # Price efficiency
-        if price_per_gb < 1500:
-            pros.append(f"High price efficiency (₹{price_per_gb}/GB)")
-        elif price_per_gb > 2000:
-            cons.append(f"Premium cost per GB (₹{price_per_gb}/GB)")
-
-        if val_score >= 70:
+        if val_score is not None and val_score >= 70:
             pros.append(f"Outstanding Value Score ({val_score}/100)")
 
         comparison_items.append({
@@ -156,9 +195,13 @@ def build_product_comparison(products: List[Dict[str, Any]]) -> Dict[str, Any]:
             "cons": cons,
         })
 
-    best_value = max(comparison_items, key=lambda x: x["value_score"]) if comparison_items else None
+    scored_items = [x for x in comparison_items if x.get("value_score") is not None]
+    best_value = max(scored_items, key=lambda x: x["value_score"]) if scored_items else None
+
     best_perf = max(comparison_items, key=lambda x: (x.get("speed_mhz") or 0, -(x.get("cl_latency") or 99))) if comparison_items else None
-    budget_pick = min(comparison_items, key=lambda x: x["price"]) if comparison_items else None
+
+    priced_items = [x for x in comparison_items if x.get("price") is not None and x["price"] > 0]
+    budget_pick = min(priced_items, key=lambda x: x["price"]) if priced_items else None
 
     return {
         "status": "success",
@@ -169,20 +212,20 @@ def build_product_comparison(products: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "name": best_value["name"] if best_value else None,
                 "value_score": best_value["value_score"] if best_value else None,
                 "price": best_value["price"] if best_value else None,
-                "reason": "Highest overall value score balancing capacity, speed, latency, and cost per GB",
+                "reason": "Highest overall value score balancing capacity, speed, latency, and cost per GB" if best_value else "No priced products to compute value score",
             },
             "best_performance": {
                 "name": best_perf["name"] if best_perf else None,
                 "speed_mhz": best_perf["speed_mhz"] if best_perf else None,
                 "cl_latency": best_perf["cl_latency"] if best_perf else None,
                 "price": best_perf["price"] if best_perf else None,
-                "reason": "Top speed and lowest CAS latency among compared items",
+                "reason": "Top speed and lowest CAS latency among compared items" if best_perf else None,
             },
             "budget_pick": {
                 "name": budget_pick["name"] if budget_pick else None,
                 "price": budget_pick["price"] if budget_pick else None,
                 "capacity_gb": budget_pick["capacity_gb"] if budget_pick else None,
-                "reason": "Lowest initial purchase cost",
+                "reason": "Lowest initial purchase cost" if budget_pick else "No priced products available",
             },
         },
     }
@@ -213,29 +256,43 @@ async def search_amazon(
     optimization: 'best_value', 'cheapest', 'performance', 'rating'.
     sort_by: 'value_desc', 'price_asc', 'price_desc', 'rating_desc', 'reviews_desc'.
     """
-    products = await search_amazon_products(query)
+    try:
+        products = await search_amazon_products(query)
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "message": f"Amazon search service temporarily unavailable or failed: {str(e)}",
+            "query": query,
+            "products": [],
+            "stats": {"total_scraped": 0, "matching_criteria": 0},
+        })
 
     if not products:
         return json.dumps({
             "status": "not_found",
             "message": f"No products found on Amazon India for query: '{query}'.",
+            "query": query,
             "products": [],
-            "stats": {},
+            "stats": {"total_scraped": 0, "matching_criteria": 0},
         })
 
-    # Compute deterministic Value Score and price-per-GB for each product
+    # Compute deterministic Value Score and price-per-GB for each product without inventing prices
     for p in products:
         cap = p.get("capacity_gb") or 16
-        prc = p.get("price") or 10000.0
-        p["value_score"] = calculate_value_score(
-            capacity_gb=cap,
-            speed_mhz=p.get("speed_mhz"),
-            cl_latency=p.get("cl_latency"),
-            rating=p.get("rating"),
-            review_count=p.get("review_count"),
-            price=prc,
-        )
-        p["price_per_gb"] = round(prc / max(cap, 1), 1)
+        prc = p.get("price")
+        if prc is not None and prc > 0:
+            p["value_score"] = calculate_value_score(
+                capacity_gb=cap,
+                speed_mhz=p.get("speed_mhz"),
+                cl_latency=p.get("cl_latency"),
+                rating=p.get("rating"),
+                review_count=p.get("review_count"),
+                price=prc,
+            )
+            p["price_per_gb"] = round(prc / max(cap, 1), 1)
+        else:
+            p["value_score"] = None
+            p["price_per_gb"] = None
 
     # Deterministic Python filtering
     filtered = products
@@ -261,6 +318,18 @@ async def search_amazon(
     if kit_size is not None:
         filtered = [p for p in filtered if p.get("kit_size") == kit_size]
 
+    if not filtered:
+        return json.dumps({
+            "status": "not_found",
+            "message": f"No products found on Amazon India matching the specified criteria for query: '{query}'.",
+            "query": query,
+            "products": [],
+            "stats": {
+                "total_scraped": len(products),
+                "matching_criteria": 0,
+            },
+        }, indent=2)
+
     # Deterministic Python sorting
     if optimization == "cheapest" or sort_by == "price_asc":
         filtered.sort(key=lambda p: (p.get("price") if p.get("price") is not None else float("inf")))
@@ -282,9 +351,10 @@ async def search_amazon(
         "matching_criteria": len(filtered),
     }
 
-    if filtered:
-        # 1. Best Value Product (highest Value Score)
-        best_value = max(filtered, key=lambda p: (p.get("value_score") or 0))
+    # Best Value Product
+    scored_filtered = [p for p in filtered if p.get("value_score") is not None]
+    if scored_filtered:
+        best_value = max(scored_filtered, key=lambda p: (p.get("value_score") or 0))
         stats["best_value_product"] = {
             "name": best_value["name"],
             "value_score": best_value["value_score"],
@@ -292,54 +362,54 @@ async def search_amazon(
             "speed_mhz": best_value.get("speed_mhz"),
             "cl_latency": best_value.get("cl_latency"),
             "form_factor": best_value.get("form_factor"),
-            "price": best_value["price"],
+            "price": best_value.get("price"),
             "price_per_gb": best_value.get("price_per_gb"),
-            "url": best_value["url"],
+            "url": best_value.get("url"),
         }
 
-        # 2. Cheapest Product
-        cheapest = min(filtered, key=lambda p: p["price"])
+    # Cheapest Product (from priced items)
+    priced_filtered = [p for p in filtered if p.get("price") is not None]
+    if priced_filtered:
+        cheapest = min(priced_filtered, key=lambda p: p["price"])
         stats["cheapest_product"] = {
             "name": cheapest["name"],
             "price": cheapest["price"],
             "capacity_gb": cheapest.get("capacity_gb"),
             "form_factor": cheapest.get("form_factor"),
-            "url": cheapest["url"],
+            "url": cheapest.get("url"),
         }
-
-        # 3. Highest Performance Product
-        highest_perf = max(filtered, key=lambda p: (p.get("speed_mhz") or 0, -(p.get("cl_latency") or 99)))
-        stats["highest_performance_product"] = {
-            "name": highest_perf["name"],
-            "speed_mhz": highest_perf.get("speed_mhz"),
-            "cl_latency": highest_perf.get("cl_latency"),
-            "price": highest_perf["price"],
-        }
-
-        # 4. Highest Rated Product
-        highest_rated = max(filtered, key=lambda p: (p.get("rating") or 0))
-        stats["highest_rated_product"] = {
-            "name": highest_rated["name"],
-            "rating": highest_rated.get("rating"),
-            "review_count": highest_rated.get("review_count"),
-            "price": highest_rated["price"],
-        }
-
-        # 5. Form Factor Breakdown
-        udimm_count = sum(1 for p in filtered if p.get("form_factor") == "UDIMM")
-        sodimm_count = sum(1 for p in filtered if p.get("form_factor") == "SODIMM")
-        stats["form_factor_breakdown"] = {
-            "UDIMM_desktop": udimm_count,
-            "SODIMM_laptop": sodimm_count,
-        }
-
-        # 6. Price Range
-        prices = [p["price"] for p in filtered]
+        prices = [p["price"] for p in priced_filtered]
         stats["price_range"] = {
             "min_price": min(prices),
             "max_price": max(prices),
             "avg_price": round(sum(prices) / len(prices), 2),
         }
+
+    # Highest Performance Product
+    highest_perf = max(filtered, key=lambda p: (p.get("speed_mhz") or 0, -(p.get("cl_latency") or 99)))
+    stats["highest_performance_product"] = {
+        "name": highest_perf["name"],
+        "speed_mhz": highest_perf.get("speed_mhz"),
+        "cl_latency": highest_perf.get("cl_latency"),
+        "price": highest_perf.get("price"),
+    }
+
+    # Highest Rated Product
+    highest_rated = max(filtered, key=lambda p: (p.get("rating") or 0))
+    stats["highest_rated_product"] = {
+        "name": highest_rated["name"],
+        "rating": highest_rated.get("rating"),
+        "review_count": highest_rated.get("review_count"),
+        "price": highest_rated.get("price"),
+    }
+
+    # Form Factor Breakdown
+    udimm_count = sum(1 for p in filtered if p.get("form_factor") == "UDIMM")
+    sodimm_count = sum(1 for p in filtered if p.get("form_factor") == "SODIMM")
+    stats["form_factor_breakdown"] = {
+        "UDIMM_desktop": udimm_count,
+        "SODIMM_laptop": sodimm_count,
+    }
 
     # Store in session product cache for multi-step retrieval and comparison
     for p in filtered:
@@ -348,7 +418,7 @@ async def search_amazon(
     # Compact product list to conserve Groq tokens per minute (TPM)
     compact_prods = [
         {
-            "name": p.get("name")[:75],
+            "name": p.get("name", "")[:75],
             "price": p.get("price"),
             "capacity_gb": p.get("capacity_gb"),
             "speed_mhz": p.get("speed_mhz"),
@@ -363,11 +433,13 @@ async def search_amazon(
     ]
 
     payload = {
+        "status": "success",
         "query": query,
         "total_scraped": stats.get("total_scraped"),
         "matching_criteria": stats.get("matching_criteria"),
         "best_value": stats.get("best_value_product"),
         "cheapest": stats.get("cheapest_product"),
+        "stats": stats,
         "products": compact_prods,
     }
 
@@ -388,6 +460,7 @@ async def get_product_details(url: str) -> str:
         details = await get_amazon_product_details(url)
         register_product_in_cache(details)
         compact_details = {
+            "status": "success",
             "name": details.get("name", "Unknown")[:75],
             "url": details.get("url"),
             "price": details.get("price"),
@@ -400,7 +473,8 @@ async def get_product_details(url: str) -> str:
             "kit_size": details.get("kit_size"),
             "brand": details.get("brand"),
             "model_number": details.get("model_number"),
-            "highlights": details.get("highlights", [])[:2],
+            "specs": details.get("specs", {}),
+            "highlights": [h[:120] for h in details.get("highlights", [])[:2]],
         }
         return json.dumps(compact_details, indent=2)
     except Exception as e:
@@ -479,7 +553,7 @@ async def scrape_url(url: str) -> str:
             "status": "success",
             "url": data["url"],
             "title": data["title"],
-            "content_preview": data["content"][:2000],
+            "content_preview": data["content"][:800],
             "char_count": data["char_count"],
         })
     except Exception as e:
@@ -501,10 +575,10 @@ async def search_rag(url: str, query: str) -> str:
     try:
         results = await mgr.vector_store.asimilarity_search_with_relevance_scores(
             query=query,
-            k=4,
+            k=2,
             filter={"url": str(url)},
         )
-        chunks = [{"content": doc.page_content, "score": round(float(score), 4)} for doc, score in results]
+        chunks = [{"content": doc.page_content[:350], "score": round(float(score), 4)} for doc, score in results]
         return json.dumps({"status": "success", "url": url, "chunks": chunks})
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)})
@@ -538,7 +612,7 @@ def analyze_task_intent(task: str) -> Dict[str, Any]:
     budget_val = None
     # match patterns like "under ₹50,000", "under 50000", "under 50k", "below 10,000", "budget 20000", "< 50000"
     budget_match = re.search(
-        r'(?:under|below|less than|budget(?: of)?|max(?: price)?|<=?)\s*(?:₹|rs\.?|inr)?\s*([\d,]+(?:\.\d+)?|\d+k)',
+        r'(?:under|below|less than|budget(?: of)?|max(?: price)?|<=?)\s*(?:₹|rs\.?|inr)?\s*(\d+k|[\d,]+(?:\.\d+)?)',
         task_lower,
     )
     if budget_match:
@@ -622,6 +696,101 @@ def analyze_task_intent(task: str) -> Dict[str, Any]:
     }
 
 
+
+# ---------------------------------------------------------------------------
+# Context Budget & Token Optimization Constants
+# ---------------------------------------------------------------------------
+# Active Groq Model: openai/gpt-oss-20b
+# Limits: 30 RPM, 8,000 TPM, 1,000 RPD, 200,000 TPD
+GROQ_TPM_LIMIT = 8000
+GROQ_SAFE_CALL_TOKEN_LIMIT = 5000       # Safe ceiling per single request
+GROQ_COMPACT_TRIGGER_TOKENS = 3200      # Trigger history compaction when context reaches this
+GROQ_ABSOLUTE_OVERFLOW_TOKENS = 6500    # Abort with graceful guidance rather than trigger a 429
+
+
+def estimate_message_tokens(messages: List[Any]) -> int:
+    """
+    Lightweight, conservative heuristic token estimator for Groq/Llama models.
+    Estimates ~3.3 characters per token + per-message structure overhead.
+    Fast (sub-millisecond), zero external dependencies.
+    """
+    total_chars = 0
+    for m in messages:
+        c = getattr(m, "content", "")
+        if isinstance(c, str):
+            total_chars += len(c)
+        elif isinstance(c, list):
+            total_chars += sum(len(str(item)) for item in c)
+        tcs = getattr(m, "tool_calls", None) or []
+        for tc in tcs:
+            if isinstance(tc, dict):
+                total_chars += len(tc.get("name", "")) + len(json.dumps(tc.get("args", {})))
+            else:
+                total_chars += len(str(tc))
+    return int(total_chars / 3.3) + (len(messages) * 4)
+
+
+def compact_message_history(messages: List[Any]) -> List[Any]:
+    """
+    Deterministically compacts older ToolMessage contents in the conversation history
+    when context approaches the TPM token threshold.
+    Preserves SystemMessage and initial HumanMessage, but condenses older tool results
+    into concise key-value summaries.
+    """
+    if len(messages) <= 3:
+        return messages
+
+    compacted: List[Any] = []
+    compacted.append(messages[0])
+    compacted.append(messages[1])
+
+    intermediate = messages[2:-1] if len(messages) > 3 else []
+    for m in intermediate:
+        if isinstance(m, ToolMessage):
+            content = m.content
+            try:
+                data = json.loads(content) if isinstance(content, str) else content
+                if isinstance(data, dict):
+                    if "products" in data and len(data.get("products", [])) > 2:
+                        compact_data = {
+                            "summary": f"Found {data.get('total_scraped', len(data['products']))} items. Best value: {data.get('best_value', {}).get('name')}",
+                            "top_candidates": [
+                                f"{p.get('name')[:40]}: ₹{p.get('price')} (Score: {p.get('value_score')})"
+                                for p in data["products"][:3]
+                            ],
+                        }
+                        compacted.append(
+                            ToolMessage(
+                                tool_call_id=m.tool_call_id,
+                                name=m.name,
+                                content=json.dumps(compact_data),
+                            )
+                        )
+                        continue
+                    elif "voltage" in data or "warranty" in data or "speed_mhz" in data:
+                        compact_data = {
+                            "name": data.get("name", "")[:50],
+                            "price": data.get("price"),
+                            "specs": f"{data.get('speed_mhz')}MHz CL{data.get('cl_latency')} {data.get('voltage')}V, {data.get('warranty')}",
+                        }
+                        compacted.append(
+                            ToolMessage(
+                                tool_call_id=m.tool_call_id,
+                                name=m.name,
+                                content=json.dumps(compact_data),
+                            )
+                        )
+                        continue
+            except Exception:
+                pass
+        compacted.append(m)
+
+    if len(messages) > 2:
+        compacted.append(messages[-1])
+
+    return compacted
+
+
 # ---------------------------------------------------------------------------
 # Agent Service (The Multi-Step Brain)
 # ---------------------------------------------------------------------------
@@ -636,10 +805,16 @@ class AgentService:
         self,
         llm_model: Optional[str] = None,
         temperature: float = 0.1,
+        llm: Optional[Any] = None,
     ):
-        self.llm_model = llm_model or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+        self.llm_model = (
+            llm_model
+            or os.getenv("GROQ_MODEL")
+            or os.getenv("GOOGLE_MODEL")
+            or "openai/gpt-oss-20b"
+        )
         self.temperature = temperature
-        self._llm: Optional[ChatGroq] = None
+        self._llm = llm
 
         # Registered tool capabilities
         self.tools = [
@@ -653,22 +828,36 @@ class AgentService:
         ]
         self.tools_by_name = {t.name: t for t in self.tools}
 
-    def get_llm(self) -> ChatGroq:
-        """Lazily initialize ChatGroq bound with tools."""
+    def get_llm(self) -> Any:
+        """Lazily initialize ChatGroq bound with tools or return injected LLM."""
+        if self._llm is not None:
+            return self._llm
+
         groq_api_key = os.getenv("GROQ_API_KEY")
-        if not groq_api_key:
-            raise ValueError(
-                "GROQ_API_KEY environment variable is not set. "
-                "Please add GROQ_API_KEY to your .env file."
-            )
-        if self._llm is None:
+        if groq_api_key and "gemini" not in self.llm_model.lower():
             self._llm = ChatGroq(
                 model=self.llm_model,
                 temperature=self.temperature,
                 api_key=groq_api_key,
                 max_retries=3,
             )
-        return self._llm
+            return self._llm
+
+        # Fallback to Google GenAI if model is Gemini and Gemini API key is present
+        google_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if google_api_key and "gemini" in self.llm_model.lower():
+            self._llm = GoogleGenerativeAI(
+                model=self.llm_model,
+                temperature=self.temperature,
+                google_api_key=google_api_key,
+                max_retries=3,
+            )
+            return self._llm
+
+        raise ValueError(
+            "GROQ_API_KEY environment variable is not set. "
+            "Please add GROQ_API_KEY to your .env file."
+        )
 
     async def run_task(self, task: str, max_steps: int = 6) -> Dict[str, Any]:
         """
@@ -679,7 +868,7 @@ class AgentService:
         4. Step 4 (Final Synthesis): Formulates a comprehensive markdown comparison table & advice.
         """
         llm = self.get_llm()
-        llm_with_tools = llm.bind_tools(self.tools)
+        llm_with_tools = llm.bind_tools(self.tools) if hasattr(llm, "bind_tools") else llm
 
         system_instruction = (
             "You are an intelligent, autonomous multi-step research and shopping agent specialized in computer hardware.\n"
@@ -718,34 +907,141 @@ class AgentService:
         detailed_products: List[Dict[str, Any]] = []
         comparison_data: Optional[Dict[str, Any]] = None
         final_answer: str = ""
+        executed_tool_signatures: Set[str] = set()
+
+        search_calls_count = 0
+        details_calls_count = 0
+        compare_calls_count = 0
 
         while step < max_steps:
-            # Call LLM with automatic retry on TPM rate limit
+            # Lightweight budget check & deterministic context compaction
+            est_tokens = estimate_message_tokens(messages)
+            if est_tokens > GROQ_COMPACT_TRIGGER_TOKENS:
+                messages = compact_message_history(messages)
+                est_tokens = estimate_message_tokens(messages)
+
+            if est_tokens > GROQ_ABSOLUTE_OVERFLOW_TOKENS:
+                final_answer = (
+                    "The conversation context exceeds safe token processing thresholds (8,000 TPM limit). "
+                    "Please consider narrowing your task (for example, specifying a particular budget, RAM capacity, or form factor) "
+                    "so I can provide a precise recommendation within rate limits."
+                )
+                break
+            # Call LLM with automatic retry on TPM rate limit respecting retry guidance
             response = None
-            for retry_i in range(3):
+            max_retries = 3
+            for retry_i in range(max_retries):
                 try:
                     response = await llm_with_tools.ainvoke(messages)
                     break
                 except Exception as e:
                     err_msg = str(e).lower()
-                    if ("413" in err_msg or "rate_limit" in err_msg or "tpm" in err_msg or "429" in err_msg) and retry_i < 2:
-                        await asyncio.sleep(5.0 * (retry_i + 1))
+                    if ("413" in err_msg or "rate_limit" in err_msg or "tpm" in err_msg or "429" in err_msg or "resourceexhausted" in err_msg or "quota" in err_msg) and retry_i < max_retries - 1:
+                        backoff = extract_retry_after(e, default_wait=2.0 * (retry_i + 1), max_backoff=10.0)
+                        await asyncio.sleep(backoff)
                     else:
                         raise
 
             messages.append(response)
 
             # Check if LLM finished and produced final content with no further tool calls
-            if not response.tool_calls:
+            tool_calls = getattr(response, "tool_calls", None) or []
+            if not tool_calls:
                 final_answer = response.content if isinstance(response.content, str) else str(response.content)
                 break
 
             # Execute tool calls emitted in this step
-            for tc in response.tool_calls:
-                tool_name = tc["name"]
-                tool_args = tc["args"]
-                tool_id = tc["id"]
+            for tc in tool_calls:
+                tool_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+                tool_args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})
+                tool_id = tc.get("id", f"call_{step}") if isinstance(tc, dict) else getattr(tc, "id", f"call_{step}")
                 tools_called_list.append(tool_name)
+
+                # Repetition detection: check if tool call signature has already been executed
+                tool_sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
+                if tool_sig in executed_tool_signatures:
+                    repetition_msg = (
+                        f"Repeated tool call detected: '{tool_name}' was already executed with identical arguments. "
+                        "Do not repeat identical calls. Please proceed to the next step or synthesize your final recommendation."
+                    )
+                    steps_taken.append({
+                        "step": step + 1,
+                        "tool": tool_name,
+                        "arguments": tool_args,
+                        "repetition_detected": True,
+                    })
+                    messages.append(
+                        ToolMessage(
+                            tool_call_id=tool_id,
+                            name=tool_name,
+                            content=json.dumps({"error": repetition_msg, "repetition_detected": True}),
+                        )
+                    )
+                    continue
+
+                executed_tool_signatures.add(tool_sig)
+
+                # Tool-specific budget limits (1 search, at most 2 details, 1 comparison)
+                if tool_name in ["search_amazon", "search_web"]:
+                    search_calls_count += 1
+                    if search_calls_count > 1:
+                        steps_taken.append({
+                            "step": step + 1,
+                            "tool": tool_name,
+                            "arguments": tool_args,
+                            "intercepted": True,
+                        })
+                        messages.append(
+                            ToolMessage(
+                                tool_call_id=tool_id,
+                                name=tool_name,
+                                content=json.dumps({
+                                    "status": "limit_reached",
+                                    "message": "Search limit reached (maximum 1 search call per task). Please inspect top candidates or proceed with existing products.",
+                                }),
+                            )
+                        )
+                        continue
+                elif tool_name == "get_product_details":
+                    details_calls_count += 1
+                    if details_calls_count > 2:
+                        steps_taken.append({
+                            "step": step + 1,
+                            "tool": tool_name,
+                            "arguments": tool_args,
+                            "intercepted": True,
+                        })
+                        messages.append(
+                            ToolMessage(
+                                tool_call_id=tool_id,
+                                name=tool_name,
+                                content=json.dumps({
+                                    "status": "limit_reached",
+                                    "message": "Inspection limit reached (maximum 2 product inspections). Please proceed to compare_products or synthesize your final recommendation.",
+                                }),
+                            )
+                        )
+                        continue
+                elif tool_name == "compare_products":
+                    compare_calls_count += 1
+                    if compare_calls_count > 1:
+                        steps_taken.append({
+                            "step": step + 1,
+                            "tool": tool_name,
+                            "arguments": tool_args,
+                            "intercepted": True,
+                        })
+                        messages.append(
+                            ToolMessage(
+                                tool_call_id=tool_id,
+                                name=tool_name,
+                                content=json.dumps({
+                                    "status": "already_compared",
+                                    "message": "Product comparison has already been executed. Please proceed to your final recommendation.",
+                                }),
+                            )
+                        )
+                        continue
 
                 selected_tool = self.tools_by_name.get(tool_name)
                 if selected_tool:
@@ -791,37 +1087,41 @@ class AgentService:
 
         # Fallback synthesis if final_answer is empty
         if not final_answer or not final_answer.strip():
-            synthesis_messages = [
-                SystemMessage(
-                    content=(
-                        "You are an expert computer hardware shopping advisor. "
-                        "Based on the collected multi-step research data, provide a definitive, structured recommendation. "
-                        "Include a Markdown comparison table, explain why the best value product wins using its Value Score, "
-                        "and verify RAM form factor (UDIMM vs SODIMM), speed, CL latency, voltage, and warranty."
-                    )
-                ),
-                HumanMessage(
-                    content=(
-                        f"User Task: {task}\n\n"
-                        f"Search Products:\n{json.dumps(all_products[:6], indent=2)}\n\n"
-                        f"Detailed Products Inspected:\n{json.dumps(detailed_products, indent=2)}\n\n"
-                        f"Comparison Results:\n{json.dumps(comparison_data, indent=2) if comparison_data else 'N/A'}\n\n"
-                        "Please write the final recommendation."
-                    )
-                ),
-            ]
-            for retry_i in range(3):
-                try:
-                    synth_res = await llm.ainvoke(synthesis_messages)
-                    final_answer = synth_res.content if isinstance(synth_res.content, str) else str(synth_res.content)
-                    break
-                except Exception as e:
-                    err_msg = str(e).lower()
-                    if ("413" in err_msg or "rate_limit" in err_msg or "tpm" in err_msg or "429" in err_msg) and retry_i < 2:
-                        await asyncio.sleep(5.0 * (retry_i + 1))
-                    else:
-                        raise
-
+            if not all_products:
+                final_answer = "No suitable products matching the specified criteria were found on Amazon India. Please consider relaxing your budget, capacity, or form factor constraints."
+            else:
+                synthesis_messages = [
+                    SystemMessage(
+                        content=(
+                            "You are an expert computer hardware shopping advisor. "
+                            "Based on the collected multi-step research data, provide a definitive, structured recommendation. "
+                            "Include a Markdown comparison table, explain why the best value product wins using its Value Score, "
+                            "and verify RAM form factor (UDIMM vs SODIMM), speed, CL latency, voltage, and warranty."
+                        )
+                    ),
+                    HumanMessage(
+                        content=(
+                            f"User Task: {task}\n\n"
+                            f"Search Products:\n{json.dumps(all_products[:6], indent=2)}\n\n"
+                            f"Detailed Products Inspected:\n{json.dumps(detailed_products, indent=2)}\n\n"
+                            f"Comparison Results:\n{json.dumps(comparison_data, indent=2) if comparison_data else 'N/A'}\n\n"
+                            "Please write the final recommendation."
+                        )
+                    ),
+                ]
+                for retry_i in range(3):
+                    try:
+                        synth_res = await llm.ainvoke(synthesis_messages)
+                        final_answer = synth_res.content if isinstance(synth_res.content, str) else str(synth_res.content)
+                        break
+                    except Exception as e:
+                        err_msg = str(e).lower()
+                        if ("413" in err_msg or "rate_limit" in err_msg or "tpm" in err_msg or "429" in err_msg or "resourceexhausted" in err_msg or "quota" in err_msg) and retry_i < 2:
+                            backoff = extract_retry_after(e, default_wait=2.0 * (retry_i + 1), max_backoff=10.0)
+                            await asyncio.sleep(backoff)
+                        else:
+                            final_answer = "Completed research based on retrieved products."
+                            break
 
         clean_final_answer = final_answer.strip()
         first_tool_called = tools_called_list[0] if tools_called_list else None
@@ -853,7 +1153,7 @@ class AgentService:
         Enables true live tool execution traces in the UI.
         """
         llm = self.get_llm()
-        llm_with_tools = llm.bind_tools(self.tools)
+        llm_with_tools = llm.bind_tools(self.tools) if hasattr(llm, "bind_tools") else llm
 
         system_instruction = (
             "You are an intelligent, autonomous multi-step research and shopping agent specialized in computer hardware.\n"
@@ -912,60 +1212,182 @@ class AgentService:
         detailed_products: List[Dict[str, Any]] = []
         comparison_data: Optional[Dict[str, Any]] = None
         final_answer: str = ""
+        executed_tool_signatures: Set[str] = set()
+
+        search_calls_count = 0
+        details_calls_count = 0
+        compare_calls_count = 0
 
         try:
             while step < max_steps:
+                # Lightweight budget check & deterministic context compaction
+                est_tokens = estimate_message_tokens(messages)
+                if est_tokens > GROQ_COMPACT_TRIGGER_TOKENS:
+                    messages = compact_message_history(messages)
+                    est_tokens = estimate_message_tokens(messages)
+
+                if est_tokens > GROQ_ABSOLUTE_OVERFLOW_TOKENS:
+                    yield {
+                        "type": "warning",
+                        "step": step + 1,
+                        "message": "Context token threshold exceeded; halting execution to protect TPM quota.",
+                    }
+                    final_answer = (
+                        "The conversation context exceeds safe token processing thresholds (8,000 TPM limit). "
+                        "Please consider narrowing your task (for example, specifying a particular budget, RAM capacity, or form factor) "
+                        "so I can provide a precise recommendation within rate limits."
+                    )
+                    break
                 yield {
                     "type": "step_start",
                     "step": step + 1,
                     "message": f"Step {step + 1}: Agent reasoning and tool selection...",
                 }
 
-                # Call LLM with automatic retry on TPM rate limit
+                # Call LLM with automatic retry on TPM rate limit respecting retry guidance
                 response = None
-                for retry_i in range(3):
+                max_retries = 3
+                for retry_i in range(max_retries):
                     try:
                         response = await llm_with_tools.ainvoke(messages)
                         break
                     except Exception as e:
                         err_msg = str(e).lower()
-                        if ("413" in err_msg or "rate_limit" in err_msg or "tpm" in err_msg or "429" in err_msg) and retry_i < 2:
+                        if ("413" in err_msg or "rate_limit" in err_msg or "tpm" in err_msg or "429" in err_msg or "resourceexhausted" in err_msg or "quota" in err_msg) and retry_i < max_retries - 1:
+                            backoff = extract_retry_after(e, default_wait=2.0 * (retry_i + 1), max_backoff=10.0)
                             yield {
                                 "type": "warning",
-                                "message": f"Groq TPM rate limit hit, backing off ({5 * (retry_i + 1)}s)...",
+                                "message": f"Groq TPM rate limit hit, respecting retry guidance: backing off {backoff:.1f}s...",
                             }
-                            await asyncio.sleep(5.0 * (retry_i + 1))
+                            await asyncio.sleep(backoff)
                         else:
                             raise
 
                 messages.append(response)
 
                 # Check if LLM finished and produced final content with no further tool calls
-                if not response.tool_calls:
+                tool_calls = getattr(response, "tool_calls", None) or []
+                if not tool_calls:
                     final_answer = response.content if isinstance(response.content, str) else str(response.content)
                     break
 
-                if any(tc["name"] == "get_product_details" for tc in response.tool_calls):
+                if any(tc["name"] == "get_product_details" for tc in tool_calls):
                     yield {
                         "type": "agent_thought",
                         "step": step + 1,
                         "title": "Agent decision",
                         "message": "Detailed specifications required",
                     }
-                elif not any(tc["name"] in ["search_amazon", "search_web", "compare_products"] for tc in response.tool_calls):
+                elif not any(tc["name"] in ["search_amazon", "search_web", "compare_products"] for tc in tool_calls):
                     yield {
                         "type": "agent_thought",
                         "step": step + 1,
                         "title": "Agent decision",
-                        "message": f"Agent selected {len(response.tool_calls)} tool(s) to execute",
+                        "message": f"Agent selected {len(tool_calls)} tool(s) to execute",
                     }
 
                 # Execute tool calls emitted in this step
-                for tc in response.tool_calls:
-                    tool_name = tc["name"]
-                    tool_args = tc["args"]
-                    tool_id = tc["id"]
+                for tc in tool_calls:
+                    tool_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+                    tool_args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})
+                    tool_id = tc.get("id", f"call_{step}") if isinstance(tc, dict) else getattr(tc, "id", f"call_{step}")
                     tools_called_list.append(tool_name)
+
+                    # Repetition detection
+                    tool_sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
+                    if tool_sig in executed_tool_signatures:
+                        yield {
+                            "type": "warning",
+                            "step": step + 1,
+                            "message": f"Repeated tool call '{tool_name}' detected. Skipping duplicate execution.",
+                        }
+                        messages.append(
+                            ToolMessage(
+                                tool_call_id=tool_id,
+                                name=tool_name,
+                                content=json.dumps({"error": f"Repeated tool call '{tool_name}' detected. Skipping duplicate execution."}),
+                            )
+                        )
+                        continue
+
+                    executed_tool_signatures.add(tool_sig)
+
+                    # Tool-specific budget limits (1 search, at most 2 details, 1 comparison)
+                    if tool_name in ["search_amazon", "search_web"]:
+                        search_calls_count += 1
+                        if search_calls_count > 1:
+                            yield {
+                                "type": "warning",
+                                "step": step + 1,
+                                "message": f"Search limit reached (maximum 1 search call per task). Skipping duplicate search.",
+                            }
+                            steps_taken.append({
+                                "step": step + 1,
+                                "tool": tool_name,
+                                "arguments": tool_args,
+                                "intercepted": True,
+                            })
+                            messages.append(
+                                ToolMessage(
+                                    tool_call_id=tool_id,
+                                    name=tool_name,
+                                    content=json.dumps({
+                                        "status": "limit_reached",
+                                        "message": "Search limit reached (maximum 1 search call per task). Please inspect top candidates or proceed with existing products.",
+                                    }),
+                                )
+                            )
+                            continue
+                    elif tool_name == "get_product_details":
+                        details_calls_count += 1
+                        if details_calls_count > 2:
+                            yield {
+                                "type": "warning",
+                                "step": step + 1,
+                                "message": f"Inspection limit reached (maximum 2 product inspections). Skipping further details.",
+                            }
+                            steps_taken.append({
+                                "step": step + 1,
+                                "tool": tool_name,
+                                "arguments": tool_args,
+                                "intercepted": True,
+                            })
+                            messages.append(
+                                ToolMessage(
+                                    tool_call_id=tool_id,
+                                    name=tool_name,
+                                    content=json.dumps({
+                                        "status": "limit_reached",
+                                        "message": "Inspection limit reached (maximum 2 product inspections). Please proceed to compare_products or synthesize your final recommendation.",
+                                    }),
+                                )
+                            )
+                            continue
+                    elif tool_name == "compare_products":
+                        compare_calls_count += 1
+                        if compare_calls_count > 1:
+                            yield {
+                                "type": "warning",
+                                "step": step + 1,
+                                "message": f"Product comparison already performed. Skipping duplicate comparison.",
+                            }
+                            steps_taken.append({
+                                "step": step + 1,
+                                "tool": tool_name,
+                                "arguments": tool_args,
+                                "intercepted": True,
+                            })
+                            messages.append(
+                                ToolMessage(
+                                    tool_call_id=tool_id,
+                                    name=tool_name,
+                                    content=json.dumps({
+                                        "status": "already_compared",
+                                        "message": "Product comparison has already been executed. Please proceed to your final recommendation.",
+                                    }),
+                                )
+                            )
+                            continue
 
                     start_t = time.time()
                     if tool_name in ["search_amazon", "search_web"]:
@@ -998,7 +1420,7 @@ class AgentService:
                             "tool_id": tool_id,
                         }
                     elif tool_name == "get_product_details":
-                        details_count = sum(1 for c in response.tool_calls if c["name"] == "get_product_details")
+                        details_count = sum(1 for c in tool_calls if c["name"] == "get_product_details")
                         tool_display = f"get_product_details × {details_count}" if details_count > 1 else "get_product_details"
                         yield {
                             "type": "tool_start",
@@ -1129,42 +1551,68 @@ class AgentService:
 
             # Fallback synthesis if final_answer is empty
             if not final_answer or not final_answer.strip():
-                yield {
-                    "type": "synthesis_start",
-                    "step": step,
-                    "title": "Final synthesis",
-                    "message": "Generating recommendation",
-                }
-                synthesis_messages = [
-                    SystemMessage(
-                        content=(
-                            "You are an expert computer hardware shopping advisor. "
-                            "Based on the collected multi-step research data, provide a definitive, structured recommendation. "
-                            "Include a Markdown comparison table, explain why the best value product wins using its Value Score, "
-                            "and verify RAM form factor (UDIMM vs SODIMM), speed, CL latency, voltage, and warranty."
-                        )
-                    ),
-                    HumanMessage(
-                        content=(
-                            f"User Task: {task}\n\n"
-                            f"Search Products:\n{json.dumps(all_products[:6], indent=2)}\n\n"
-                            f"Detailed Products Inspected:\n{json.dumps(detailed_products, indent=2)}\n\n"
-                            f"Comparison Results:\n{json.dumps(comparison_data, indent=2) if comparison_data else 'N/A'}\n\n"
-                            "Please write the final recommendation."
-                        )
-                    ),
-                ]
-                for retry_i in range(3):
-                    try:
-                        synth_res = await llm.ainvoke(synthesis_messages)
-                        final_answer = synth_res.content if isinstance(synth_res.content, str) else str(synth_res.content)
-                        break
-                    except Exception as e:
-                        err_msg = str(e).lower()
-                        if ("413" in err_msg or "rate_limit" in err_msg or "tpm" in err_msg or "429" in err_msg) and retry_i < 2:
-                            await asyncio.sleep(5.0 * (retry_i + 1))
-                        else:
-                            raise
+                if not all_products:
+                    final_answer = "No suitable products matching the specified criteria were found on Amazon India. Please consider relaxing your budget, capacity, or form factor constraints."
+                else:
+                    yield {
+                        "type": "synthesis_start",
+                        "step": step,
+                        "title": "Final synthesis",
+                        "message": "Generating recommendation",
+                    }
+                    compact_prods_for_synth = [
+                        {
+                            "name": p.get("name", "")[:60],
+                            "price": p.get("price"),
+                            "capacity": f"{p.get('capacity_gb')}GB" if p.get("capacity_gb") else None,
+                            "speed": f"{p.get('speed_mhz')}MHz" if p.get("speed_mhz") else None,
+                            "cl": f"CL{p.get('cl_latency')}" if p.get("cl_latency") else None,
+                            "form_factor": p.get("form_factor"),
+                            "value_score": p.get("value_score"),
+                        }
+                        for p in all_products[:4]
+                    ]
+                    compact_details_for_synth = [
+                        {
+                            "name": d.get("name", "")[:50],
+                            "voltage": d.get("voltage"),
+                            "warranty": d.get("warranty"),
+                            "cl_latency": d.get("cl_latency"),
+                        }
+                        for d in detailed_products[:2]
+                    ]
+                    synthesis_messages = [
+                        SystemMessage(
+                            content=(
+                                "You are an expert computer hardware shopping advisor. "
+                                "Based on the collected multi-step research data, provide a definitive, structured recommendation. "
+                                "Include a Markdown comparison table, explain why the best value product wins using its Value Score, "
+                                "and verify RAM form factor (UDIMM vs SODIMM), speed, CL latency, voltage, and warranty."
+                            )
+                        ),
+                        HumanMessage(
+                            content=(
+                                f"User Task: {task}\n\n"
+                                f"Search Products:\n{json.dumps(compact_prods_for_synth, indent=2)}\n\n"
+                                f"Detailed Products Inspected:\n{json.dumps(compact_details_for_synth, indent=2)}\n\n"
+                                f"Comparison Results:\n{json.dumps(comparison_data.get('verdict', comparison_data) if comparison_data else 'N/A', indent=2)}\n\n"
+                                "Please write the final recommendation."
+                            )
+                        ),
+                    ]
+                    for retry_i in range(3):
+                        try:
+                            synth_res = await llm.ainvoke(synthesis_messages)
+                            final_answer = synth_res.content if isinstance(synth_res.content, str) else str(synth_res.content)
+                            break
+                        except Exception as e:
+                            err_msg = str(e).lower()
+                            if ("413" in err_msg or "rate_limit" in err_msg or "tpm" in err_msg or "429" in err_msg or "resourceexhausted" in err_msg or "quota" in err_msg) and retry_i < 2:
+                                backoff = extract_retry_after(e, default_wait=2.0 * (retry_i + 1), max_backoff=10.0)
+                                await asyncio.sleep(backoff)
+                            else:
+                                final_answer = "Completed research based on retrieved products."
+                                break
             else:
                 yield {
                     "type": "synthesis_start",
@@ -1192,11 +1640,12 @@ class AgentService:
             }
 
 
-
-# Default singleton instance
-default_agent_service = AgentService()
+# Default singleton instance (lazy)
+_default_agent_service: Optional[AgentService] = None
 
 
 def get_agent_service() -> AgentService:
-    return default_agent_service
-
+    global _default_agent_service
+    if _default_agent_service is None:
+        _default_agent_service = AgentService()
+    return _default_agent_service

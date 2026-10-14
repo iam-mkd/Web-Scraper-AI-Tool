@@ -1,0 +1,306 @@
+{
+  "timestamp": "2026-10-14 15:44:40",
+  "total_cases": 10,
+  "passed_cases": 8,
+  "failed_cases": 2,
+  "overall_accuracy": 0.8,
+  "failure_rate": 0.2,
+  "avg_latency_ms": 3352.016220000587,
+  "grounding_avg_score": 1.0,
+  "category_metrics": {
+    "intent_extraction": {
+      "total": 8,
+      "passed": 8,
+      "failed": 0,
+      "accuracy": 1.0,
+      "avg_score": 1.0
+    },
+    "tool_selection": {
+      "total": 2,
+      "passed": 0,
+      "failed": 2,
+      "accuracy": 0.0,
+      "avg_score": 0.0
+    }
+  },
+  "results": [
+    {
+      "case_id": "intent_01",
+      "category": "intent_extraction",
+      "task": "Find me the best DDR5 RAM deal on Amazon under 10000",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 1.934599997184705,
+      "error": null,
+      "checks": [
+        {
+          "name": "optimization",
+          "passed": true,
+          "details": "Expected 'Best value (Perf / \u20b9)', got 'Best value (Perf / \u20b9)'"
+        },
+        {
+          "name": "budget_str",
+          "passed": true,
+          "details": "Expected '\u20b910,000', got '\u20b910,000'"
+        },
+        {
+          "name": "budget_val",
+          "passed": true,
+          "details": "Expected budget_val=10000.0, got 10000.0"
+        },
+        {
+          "name": "form_factor",
+          "passed": true,
+          "details": "Expected form_factor='UDIMM', got 'UDIMM'"
+        }
+      ]
+    },
+    {
+      "case_id": "intent_02",
+      "category": "intent_extraction",
+      "task": "I need 32GB laptop DDR5 memory",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 0.9298000004491769,
+      "error": null,
+      "checks": [
+        {
+          "name": "optimization",
+          "passed": true,
+          "details": "Expected 'Best value (Perf / \u20b9)', got 'Best value (Perf / \u20b9)'"
+        },
+        {
+          "name": "budget_str",
+          "passed": true,
+          "details": "Expected 'None', got 'None'"
+        },
+        {
+          "name": "budget_val",
+          "passed": true,
+          "details": "Expected budget_val=None, got None"
+        },
+        {
+          "name": "form_factor",
+          "passed": true,
+          "details": "Expected form_factor='SODIMM', got 'SODIMM'"
+        },
+        {
+          "name": "capacity",
+          "passed": true,
+          "details": "Expected capacity='32GB', got '32GB'"
+        }
+      ]
+    },
+    {
+      "case_id": "intent_03",
+      "category": "intent_extraction",
+      "task": "What's the cheapest DDR5 RAM available for my desktop?",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 1.520500001788605,
+      "error": null,
+      "checks": [
+        {
+          "name": "optimization",
+          "passed": true,
+          "details": "Expected 'Lowest price', got 'Lowest price'"
+        },
+        {
+          "name": "budget_str",
+          "passed": true,
+          "details": "Expected 'None', got 'None'"
+        },
+        {
+          "name": "budget_val",
+          "passed": true,
+          "details": "Expected budget_val=None, got None"
+        },
+        {
+          "name": "form_factor",
+          "passed": true,
+          "details": "Expected form_factor='UDIMM', got 'UDIMM'"
+        }
+      ]
+    },
+    {
+      "case_id": "intent_04",
+      "category": "intent_extraction",
+      "task": "I don't care about the price, give me the fastest DDR5 kit for overclocking",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 0.7958000023791101,
+      "error": null,
+      "checks": [
+        {
+          "name": "optimization",
+          "passed": true,
+          "details": "Expected 'Raw performance', got 'Raw performance'"
+        },
+        {
+          "name": "budget_str",
+          "passed": true,
+          "details": "Expected 'None', got 'None'"
+        },
+        {
+          "name": "budget_val",
+          "passed": true,
+          "details": "Expected budget_val=None, got None"
+        },
+        {
+          "name": "form_factor",
+          "passed": true,
+          "details": "Expected form_factor='UDIMM', got 'UDIMM'"
+        }
+      ]
+    },
+    {
+      "case_id": "intent_05",
+      "category": "intent_extraction",
+      "task": "Top rated 16GB desktop RAM below 5000",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 0.9011000001919456,
+      "error": null,
+      "checks": [
+        {
+          "name": "optimization",
+          "passed": true,
+          "details": "Expected 'Highest customer rating', got 'Highest customer rating'"
+        },
+        {
+          "name": "budget_str",
+          "passed": true,
+          "details": "Expected '\u20b95,000', got '\u20b95,000'"
+        },
+        {
+          "name": "budget_val",
+          "passed": true,
+          "details": "Expected budget_val=5000.0, got 5000.0"
+        },
+        {
+          "name": "form_factor",
+          "passed": true,
+          "details": "Expected form_factor='UDIMM', got 'UDIMM'"
+        },
+        {
+          "name": "capacity",
+          "passed": true,
+          "details": "Expected capacity='16GB', got '16GB'"
+        }
+      ]
+    },
+    {
+      "case_id": "intent_06",
+      "category": "intent_extraction",
+      "task": "Find SODIMM DDR5 for my notebook below 8000",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 0.7459000007656869,
+      "error": null,
+      "checks": [
+        {
+          "name": "optimization",
+          "passed": true,
+          "details": "Expected 'Best value (Perf / \u20b9)', got 'Best value (Perf / \u20b9)'"
+        },
+        {
+          "name": "budget_str",
+          "passed": true,
+          "details": "Expected '\u20b98,000', got '\u20b98,000'"
+        },
+        {
+          "name": "budget_val",
+          "passed": true,
+          "details": "Expected budget_val=8000.0, got 8000.0"
+        },
+        {
+          "name": "form_factor",
+          "passed": true,
+          "details": "Expected form_factor='SODIMM', got 'SODIMM'"
+        }
+      ]
+    },
+    {
+      "case_id": "intent_07",
+      "category": "intent_extraction",
+      "task": "Recommend the most reliable DDR5 RAM kit for a workstation PC",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 0.9454999999434222,
+      "error": null,
+      "checks": [
+        {
+          "name": "optimization",
+          "passed": true,
+          "details": "Expected 'Highest customer rating', got 'Highest customer rating'"
+        },
+        {
+          "name": "budget_str",
+          "passed": true,
+          "details": "Expected 'None', got 'None'"
+        },
+        {
+          "name": "budget_val",
+          "passed": true,
+          "details": "Expected budget_val=None, got None"
+        },
+        {
+          "name": "form_factor",
+          "passed": true,
+          "details": "Expected form_factor='UDIMM', got 'UDIMM'"
+        }
+      ]
+    },
+    {
+      "case_id": "intent_08",
+      "category": "intent_extraction",
+      "task": "Find fastest DDR5 RAM under 50k for my gaming rig",
+      "passed": true,
+      "score": 1.0,
+      "latency_ms": 0.7891999994171783,
+      "error": null,
+      "checks": [
+        {
+          "name": "optimization",
+          "passed": true,
+          "details": "Expected 'Raw performance', got 'Raw performance'"
+        },
+        {
+          "name": "budget_str",
+          "passed": true,
+          "details": "Expected '\u20b950,000', got '\u20b950,000'"
+        },
+        {
+          "name": "budget_val",
+          "passed": true,
+          "details": "Expected budget_val=50000.0, got 50000.0"
+        },
+        {
+          "name": "form_factor",
+          "passed": true,
+          "details": "Expected form_factor='UDIMM', got 'UDIMM'"
+        }
+      ]
+    },
+    {
+      "case_id": "tool_01",
+      "category": "tool_selection",
+      "task": "Search Amazon India for DDR5 6000MHz memory kits under 12000",
+      "passed": false,
+      "score": 0.0,
+      "latency_ms": 27196.634100000665,
+      "error": "Error code: 429 - {'error': {'message': \"Request too large for model `qwen/qwen3.8-27b` in organization `org_01m418d0b2eyzveq061td61ngm` service tier `on_demand` on output tokens per minute (OTPM): Limit 1000, Requested 1080. The request's expected output tokens exceed the enforced limit; reduce max_tokens (or the request's expected output) and try again. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\", 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
+      "checks": []
+    },
+    {
+      "case_id": "tool_02",
+      "category": "tool_selection",
+      "task": "Inspect the operating voltage and timings of Corsair Vengeance DDR5 from Amazon: https://www.amazon.in/CORSAIR-Vengeance-5200MHz-CL40-40-40-77-Computer/dp/B0DM2PGP4N/ref=sr_1_3?sr=8-3",
+      "passed": false,
+      "score": 0.0,
+      "latency_ms": 6314.965700003086,
+      "error": "Error code: 429 - {'error': {'message': \"Request too large for model `qwen/qwen3.8-27b` in organization `org_01m418d0b2eyzveq061td61ngm` service tier `on_demand` on output tokens per minute (OTPM): Limit 1000, Requested 1089. The request's expected output tokens exceed the enforced limit; reduce max_tokens (or the request's expected output) and try again. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\", 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
+      "checks": []
+    }
+  ]
+}

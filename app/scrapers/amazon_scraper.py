@@ -17,6 +17,7 @@ async def search_amazon_products(
     structured product information (name, price, capacity_gb, speed_mhz, cl_latency, rating, review_count, form_factor, kit_size, url).
     Bypasses anti-bot perimeter defenses using browser TLS impersonation with automatic retry backoff.
     Filters out non-RAM accessories (thermal pads, cables, etc.).
+    Preserves products with missing prices as unpriced without crashing or inventing a price.
     """
     encoded_query = urllib.parse.quote_plus(query)
     search_url = f"https://www.amazon.in/s?k={encoded_query}"
@@ -140,8 +141,9 @@ async def search_amazon_products(
                 cl_match = re.search(r"\b(?:CL|C)\s*(\d{2})\b", name, re.IGNORECASE)
                 cl_latency: Optional[int] = int(cl_match.group(1)) if cl_match else None
 
-                # Discard non-RAM items (must have price, URL, and valid RAM capacity)
-                if price is not None and product_url is not None and capacity_gb is not None:
+                # Discard non-RAM items (must have URL and valid RAM capacity)
+                # Does NOT crash if price is None; price is preserved as None without inventing a value
+                if product_url is not None and capacity_gb is not None:
                     prod_model = Product(
                         name=name,
                         price=price,
@@ -162,10 +164,10 @@ async def search_amazon_products(
                 return products
 
             if attempt < max_attempts:
-                await asyncio.sleep(1.2 * attempt)
+                await asyncio.sleep(min(1.2 * attempt, 5.0))
         except Exception:
             if attempt < max_attempts:
-                await asyncio.sleep(1.2 * attempt)
+                await asyncio.sleep(min(1.2 * attempt, 5.0))
             else:
                 raise
 
@@ -184,6 +186,8 @@ async def get_amazon_product_details(
     - Technical specifications table (Brand, Model, Dimensions, Warranty, etc.)
     - Key feature highlights
     Returns a clean, structured dictionary suitable for LLM reasoning and comparison.
+    Preserves unpriced products without inventing prices or crashing.
+    Guarantees structured dict return on failure without unexpected crash.
     """
     for attempt in range(1, max_attempts + 1):
         try:
@@ -340,10 +344,9 @@ async def get_amazon_product_details(
                 "highlights": highlights,
                 "url": url,
             }
-
         except Exception:
             if attempt < max_attempts:
-                await asyncio.sleep(1.2 * attempt)
+                await asyncio.sleep(min(1.2 * attempt, 5.0))
             else:
                 return {
                     "name": "Product Details Extraction Error",
@@ -354,4 +357,3 @@ async def get_amazon_product_details(
                 }
 
     return {"name": "Product Details Unavailable", "url": url}
-

@@ -1,4 +1,5 @@
 import re
+import asyncio
 from typing import Dict, Any
 from bs4 import BeautifulSoup
 
@@ -15,7 +16,8 @@ async def fetch_html(url: str, timeout: float = 25.0) -> str:
     """
     Fetches HTML content with browser TLS/JA3 fingerprint impersonation
     using curl_cffi to bypass anti-bot shields (Amazon, Cloudflare, etc.).
-    Falls back to httpx if curl_cffi is unavailable.
+    Falls back to httpx if curl_cffi is unavailable or fails.
+    Bubbles up timeouts and HTTP status errors cleanly.
     """
     if CURL_CFFI_AVAILABLE:
         try:
@@ -23,7 +25,7 @@ async def fetch_html(url: str, timeout: float = 25.0) -> str:
                 response = await session.get(url, timeout=timeout)
                 if response.status_code == 200:
                     return response.text
-                elif response.status_code == 999 or "linkedin.com" in url.lower() and response.status_code != 200:
+                elif response.status_code == 999 or ("linkedin.com" in url.lower() and response.status_code != 200):
                     raise PermissionError(
                         "LinkedIn blocked access with status code 999 (Request Denied). "
                         "LinkedIn personal profiles require an authenticated session (e.g., 'li_at' cookie) "
@@ -35,12 +37,18 @@ async def fetch_html(url: str, timeout: float = 25.0) -> str:
                         resp_safari = await safari_session.get(url, timeout=timeout)
                         if resp_safari.status_code == 200:
                             return resp_safari.text
+                        response = resp_safari
                 response.raise_for_status()
                 return response.text
         except PermissionError:
             raise
-        except Exception:
-            # Fallback to httpx if curl_cffi encounters an internal network issue
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise TimeoutError(f"Request to '{url}' timed out after {timeout}s.") from exc
+        except Exception as exc:
+            err_msg = str(exc).lower()
+            if "timeout" in err_msg or "timed out" in err_msg:
+                raise TimeoutError(f"Request to '{url}' timed out after {timeout}s.") from exc
+            # Fallback to httpx if curl_cffi encounters an issue or gets blocked
             pass
 
     headers = {
@@ -58,16 +66,21 @@ async def fetch_html(url: str, timeout: float = 25.0) -> str:
         "Sec-Fetch-Dest": "document",
     }
 
-    async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=timeout) as client:
-        response = await client.get(url)
-        if response.status_code == 999 or ("linkedin.com" in url.lower() and response.status_code != 200):
-            raise PermissionError(
-                "LinkedIn blocked access with status code 999 (Request Denied). "
-                "LinkedIn personal profiles require an authenticated session (e.g., 'li_at' cookie) "
-                "or official LinkedIn API access because they are protected behind a login wall."
-            )
-        response.raise_for_status()
-        return response.text
+    try:
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=timeout) as client:
+            response = await client.get(url)
+            if response.status_code == 999 or ("linkedin.com" in url.lower() and response.status_code != 200):
+                raise PermissionError(
+                    "LinkedIn blocked access with status code 999 (Request Denied). "
+                    "LinkedIn personal profiles require an authenticated session (e.g., 'li_at' cookie) "
+                    "or official LinkedIn API access because they are protected behind a login wall."
+                )
+            response.raise_for_status()
+            return response.text
+    except httpx.TimeoutException as exc:
+        raise TimeoutError(f"Request to '{url}' timed out after {timeout}s.") from exc
+    except httpx.HTTPStatusError:
+        raise
 
 
 async def scrape_webpage(url: str, timeout: float = 25.0) -> Dict[str, Any]:
@@ -111,4 +124,3 @@ async def scrape_webpage(url: str, timeout: float = 25.0) -> Dict[str, Any]:
         "content": cleaned_text,
         "char_count": len(cleaned_text),
     }
-
